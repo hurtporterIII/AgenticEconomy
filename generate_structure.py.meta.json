@@ -1,0 +1,24 @@
+{
+  "name": "generate_structure.py",
+  "type": "file",
+  "description": "Generates index and metadata scaffolding for repository discoverability",
+  "path": "C:\\Users\\Admin\\Desktop\\HACKATHON\\COmpatetion Folder\\AgenticEconomy\\generate_structure.py",
+  "role": "metadata_generator",
+  "purpose": "Generates index and metadata scaffolding for repository discoverability",
+  "inputs": [
+    "filesystem tree",
+    "exclude rules"
+  ],
+  "outputs": [
+    "index.md files",
+    ".meta.json files"
+  ],
+  "rules": [
+    "must skip excluded directories",
+    "must preserve current file structure"
+  ],
+  "dependencies": [
+    "os",
+    "json"
+  ]
+}

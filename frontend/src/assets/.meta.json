@@ -1,0 +1,24 @@
+{
+  "name": "assets",
+  "type": "folder",
+  "description": "Groups assets responsibilities into a cohesive subsystem",
+  "path": "C:\\Users\\Admin\\Desktop\\HACKATHON\\COmpatetion Folder\\AgenticEconomy\\frontend\\src\\assets",
+  "role": "module_boundary",
+  "purpose": "Groups assets responsibilities into a cohesive subsystem",
+  "inputs": [
+    "upstream module outputs",
+    "project conventions"
+  ],
+  "outputs": [
+    "organized components",
+    "clear ownership boundaries"
+  ],
+  "rules": [
+    "keep related concerns co-located",
+    "preserve stable interfaces between modules"
+  ],
+  "dependencies": [
+    "src",
+    "assets"
+  ]
+}

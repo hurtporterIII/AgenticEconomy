@@ -1,0 +1,3 @@
+PROJECT_NAME = "AgenticEconomy"
+DEFAULT_THIEF_AGENT_ID = "thief_1"
+DEFAULT_CURRENCY = "USDC"

@@ -1,0 +1,22 @@
+{
+  "name": "balances.json",
+  "type": "file",
+  "description": "Stores serialized account balances for the simulation economy",
+  "path": "C:\\Users\\Admin\\Desktop\\HACKATHON\\COmpatetion Folder\\AgenticEconomy\\backend\\bank\\balances.json",
+  "role": "ledger_snapshot",
+  "purpose": "Stores serialized account balances for the simulation economy",
+  "inputs": [
+    "credit and debit events"
+  ],
+  "outputs": [
+    "persisted account balances"
+  ],
+  "rules": [
+    "must remain valid JSON",
+    "balances must reflect applied transactions"
+  ],
+  "dependencies": [
+    "bank.py",
+    "store"
+  ]
+}

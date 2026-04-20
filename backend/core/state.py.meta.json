@@ -1,0 +1,25 @@
+{
+  "name": "state.py",
+  "type": "file",
+  "description": "Loads, patches, and persists canonical simulation state",
+  "path": "C:\\Users\\Admin\\Desktop\\HACKATHON\\COmpatetion Folder\\AgenticEconomy\\backend\\core\\state.py",
+  "role": "state_store",
+  "purpose": "Loads, patches, and persists canonical simulation state",
+  "inputs": [
+    "current state",
+    "engine commands"
+  ],
+  "outputs": [
+    "state transitions",
+    "execution results"
+  ],
+  "rules": [
+    "must preserve state consistency",
+    "must avoid side effects outside defined stores"
+  ],
+  "dependencies": [
+    "agents",
+    "store",
+    "utils"
+  ]
+}

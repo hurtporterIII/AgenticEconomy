@@ -1,0 +1,23 @@
+{
+  "name": "demo.md",
+  "type": "file",
+  "description": "Captures architecture, demo flow, and iteration notes for the project",
+  "path": "C:\\Users\\Admin\\Desktop\\HACKATHON\\COmpatetion Folder\\AgenticEconomy\\docs\\demo.md",
+  "role": "documentation",
+  "purpose": "Captures architecture, demo flow, and iteration notes for the project",
+  "inputs": [
+    "implementation status",
+    "team decisions"
+  ],
+  "outputs": [
+    "human-readable project guidance"
+  ],
+  "rules": [
+    "must reflect current system behavior",
+    "must remain concise and actionable"
+  ],
+  "dependencies": [
+    "project modules",
+    "demo process"
+  ]
+}

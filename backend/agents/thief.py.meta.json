@@ -1,0 +1,24 @@
+{
+  "name": "thief.py",
+  "type": "thief",
+  "description": "Extract value from agents and bank",
+  "path": "C:\\Users\\Admin\\Desktop\\HACKATHON\\COmpatetion Folder\\AgenticEconomy\\backend\\agents\\thief.py",
+  "role": "agent",
+  "purpose": "Extract value from agents and bank",
+  "inputs": [
+    "state"
+  ],
+  "outputs": [
+    "steal actions"
+  ],
+  "rules": [
+    "bank theft always triggers cops",
+    "agent theft triggers cops probabilistically",
+    "bank theft must use fixed increments (2 or 5)"
+  ],
+  "dependencies": [
+    "bank",
+    "core",
+    "cop"
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "name": "config.yaml",
+  "type": "file",
+  "description": "Defines runtime tuning and service host settings",
+  "path": "C:\\Users\\Admin\\Desktop\\HACKATHON\\COmpatetion Folder\\AgenticEconomy\\config\\config.yaml",
+  "role": "runtime_configuration",
+  "purpose": "Defines runtime tuning and service host settings",
+  "inputs": [
+    "deployment or local run parameters"
+  ],
+  "outputs": [
+    "resolved configuration values"
+  ],
+  "rules": [
+    "must be parseable YAML",
+    "must only contain configuration data"
+  ],
+  "dependencies": [
+    "backend runtime"
+  ]
+}

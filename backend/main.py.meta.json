@@ -1,0 +1,26 @@
+{
+  "name": "main.py",
+  "type": "file",
+  "description": "Starts backend services, wires routes, and initializes simulation state",
+  "path": "C:\\Users\\Admin\\Desktop\\HACKATHON\\COmpatetion Folder\\AgenticEconomy\\backend\\main.py",
+  "role": "api_bootstrap",
+  "purpose": "Starts backend services, wires routes, and initializes simulation state",
+  "inputs": [
+    "environment variables",
+    "route registry",
+    "state store"
+  ],
+  "outputs": [
+    "running API service",
+    "initialized simulation loop"
+  ],
+  "rules": [
+    "must initialize app state before handling requests",
+    "must expose health endpoint"
+  ],
+  "dependencies": [
+    "fastapi",
+    "core.loop",
+    "api.endpoints"
+  ]
+}

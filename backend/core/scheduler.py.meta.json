@@ -1,0 +1,25 @@
+{
+  "name": "scheduler.py",
+  "type": "file",
+  "description": "Orders and executes agent actions for each simulation tick",
+  "path": "C:\\Users\\Admin\\Desktop\\HACKATHON\\COmpatetion Folder\\AgenticEconomy\\backend\\core\\scheduler.py",
+  "role": "tick_scheduler",
+  "purpose": "Orders and executes agent actions for each simulation tick",
+  "inputs": [
+    "current state",
+    "engine commands"
+  ],
+  "outputs": [
+    "state transitions",
+    "execution results"
+  ],
+  "rules": [
+    "must preserve state consistency",
+    "must avoid side effects outside defined stores"
+  ],
+  "dependencies": [
+    "agents",
+    "store",
+    "utils"
+  ]
+}

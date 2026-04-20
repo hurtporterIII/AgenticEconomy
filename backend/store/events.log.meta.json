@@ -1,0 +1,22 @@
+{
+  "name": "events.log",
+  "type": "file",
+  "description": "Records append-only simulation events per engine tick",
+  "path": "C:\\Users\\Admin\\Desktop\\HACKATHON\\COmpatetion Folder\\AgenticEconomy\\backend\\store\\events.log",
+  "role": "event_journal",
+  "purpose": "Records append-only simulation events per engine tick",
+  "inputs": [
+    "tick event batches"
+  ],
+  "outputs": [
+    "auditable event history"
+  ],
+  "rules": [
+    "must remain append-only",
+    "each entry must include tick and timestamp"
+  ],
+  "dependencies": [
+    "core.loop",
+    "tx"
+  ]
+}

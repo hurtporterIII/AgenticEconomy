@@ -1,0 +1,24 @@
+{
+  "name": "api",
+  "type": "folder",
+  "description": "Groups api responsibilities into a cohesive subsystem",
+  "path": "C:\\Users\\Admin\\Desktop\\HACKATHON\\COmpatetion Folder\\AgenticEconomy\\backend\\api",
+  "role": "module_boundary",
+  "purpose": "Groups api responsibilities into a cohesive subsystem",
+  "inputs": [
+    "upstream module outputs",
+    "project conventions"
+  ],
+  "outputs": [
+    "organized components",
+    "clear ownership boundaries"
+  ],
+  "rules": [
+    "keep related concerns co-located",
+    "preserve stable interfaces between modules"
+  ],
+  "dependencies": [
+    "backend",
+    "api"
+  ]
+}

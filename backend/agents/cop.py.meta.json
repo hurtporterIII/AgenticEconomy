@@ -1,0 +1,25 @@
+{
+  "name": "cop.py",
+  "type": "cop",
+  "description": "Enforce rules and pursue thieves",
+  "path": "C:\\Users\\Admin\\Desktop\\HACKATHON\\COmpatetion Folder\\AgenticEconomy\\backend\\agents\\cop.py",
+  "role": "agent",
+  "purpose": "Enforce rules and pursue thieves",
+  "inputs": [
+    "state",
+    "api response"
+  ],
+  "outputs": [
+    "chase actions"
+  ],
+  "rules": [
+    "must chase after bank theft",
+    "may chase normal theft",
+    "must use paid API to locate thief"
+  ],
+  "dependencies": [
+    "service",
+    "bank",
+    "tx"
+  ]
+}

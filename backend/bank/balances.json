@@ -1,0 +1,5 @@
+{
+  "worker": 12,
+  "thief": 1,
+  "bank_reserve": 1002
+}

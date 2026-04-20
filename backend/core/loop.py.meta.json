@@ -1,0 +1,28 @@
+{
+  "name": "loop.py",
+  "type": "file",
+  "description": "Runs all agents each cycle and routes actions",
+  "path": "C:\\Users\\Admin\\Desktop\\HACKATHON\\COmpatetion Folder\\AgenticEconomy\\backend\\core\\loop.py",
+  "role": "engine_loop",
+  "purpose": "Runs all agents each cycle and routes actions",
+  "inputs": [
+    "state.json",
+    "entity registry"
+  ],
+  "outputs": [
+    "events.log",
+    "state updates"
+  ],
+  "rules": [
+    "process all agents",
+    "all actions must be priced",
+    "all actions must be logged",
+    "all value changes must trigger transaction"
+  ],
+  "dependencies": [
+    "bank",
+    "pricing",
+    "tx",
+    "agents"
+  ]
+}

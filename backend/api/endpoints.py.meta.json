@@ -1,0 +1,24 @@
+{
+  "name": "endpoints.py",
+  "type": "file",
+  "description": "Exposes simulation operations and data through HTTP endpoints",
+  "path": "C:\\Users\\Admin\\Desktop\\HACKATHON\\COmpatetion Folder\\AgenticEconomy\\backend\\api\\endpoints.py",
+  "role": "api_surface",
+  "purpose": "Exposes simulation operations and data through HTTP endpoints",
+  "inputs": [
+    "request parameters",
+    "application state"
+  ],
+  "outputs": [
+    "JSON API responses"
+  ],
+  "rules": [
+    "must validate request contract",
+    "must return stable response schema"
+  ],
+  "dependencies": [
+    "fastapi",
+    "core.loop",
+    "services"
+  ]
+}

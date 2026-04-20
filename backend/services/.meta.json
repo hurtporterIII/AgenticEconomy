@@ -1,0 +1,24 @@
+{
+  "name": "services",
+  "type": "folder",
+  "description": "Groups services responsibilities into a cohesive subsystem",
+  "path": "C:\\Users\\Admin\\Desktop\\HACKATHON\\COmpatetion Folder\\AgenticEconomy\\backend\\services",
+  "role": "module_boundary",
+  "purpose": "Groups services responsibilities into a cohesive subsystem",
+  "inputs": [
+    "upstream module outputs",
+    "project conventions"
+  ],
+  "outputs": [
+    "organized components",
+    "clear ownership boundaries"
+  ],
+  "rules": [
+    "keep related concerns co-located",
+    "preserve stable interfaces between modules"
+  ],
+  "dependencies": [
+    "backend",
+    "services"
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "name": "oracle.py",
+  "type": "file",
+  "description": "Provides data for agents (locate thief)",
+  "path": "C:\\Users\\Admin\\Desktop\\HACKATHON\\COmpatetion Folder\\AgenticEconomy\\backend\\services\\oracle.py",
+  "role": "external_service",
+  "purpose": "Provides data for agents (locate thief)",
+  "inputs": [
+    "system state"
+  ],
+  "outputs": [
+    "target selection"
+  ],
+  "rules": [
+    "must return valid entity id",
+    "must support AI or rule fallback"
+  ],
+  "dependencies": [
+    "Gemini",
+    "Featherless",
+    "AI/ML API"
+  ]
+}

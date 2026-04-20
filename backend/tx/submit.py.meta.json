@@ -1,0 +1,24 @@
+{
+  "name": "submit.py",
+  "type": "file",
+  "description": "Builds or submits transaction payloads for economy value movement",
+  "path": "C:\\Users\\Admin\\Desktop\\HACKATHON\\COmpatetion Folder\\AgenticEconomy\\backend\\tx\\submit.py",
+  "role": "tx_dispatcher",
+  "purpose": "Builds or submits transaction payloads for economy value movement",
+  "inputs": [
+    "priced action events"
+  ],
+  "outputs": [
+    "transaction payloads",
+    "submission status"
+  ],
+  "rules": [
+    "must produce traceable transaction identifiers",
+    "must preserve event linkage"
+  ],
+  "dependencies": [
+    "arc",
+    "logger",
+    "external settlement rail"
+  ]
+}

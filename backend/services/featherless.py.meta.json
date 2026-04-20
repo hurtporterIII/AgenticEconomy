@@ -1,0 +1,23 @@
+{
+  "name": "featherless.py",
+  "type": "file",
+  "description": "Wraps external service integration logic for featherless",
+  "path": "C:\\Users\\Admin\\Desktop\\HACKATHON\\COmpatetion Folder\\AgenticEconomy\\backend\\services\\featherless.py",
+  "role": "service_adapter",
+  "purpose": "Wraps external service integration logic for featherless",
+  "inputs": [
+    "service call parameters",
+    "environment credentials"
+  ],
+  "outputs": [
+    "normalized service responses"
+  ],
+  "rules": [
+    "must isolate provider-specific logic",
+    "must return deterministic response keys"
+  ],
+  "dependencies": [
+    "external APIs",
+    "actions.service"
+  ]
+}

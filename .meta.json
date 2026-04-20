@@ -1,0 +1,25 @@
+{
+  "name": "AgenticEconomy",
+  "type": "folder",
+  "description": "Defines the complete AgenticEconomy workspace and subsystem boundaries",
+  "path": "C:\\Users\\Admin\\Desktop\\HACKATHON\\COmpatetion Folder\\AgenticEconomy",
+  "role": "system_root",
+  "purpose": "Defines the complete AgenticEconomy workspace and subsystem boundaries",
+  "inputs": [
+    "project requirements",
+    "module contracts"
+  ],
+  "outputs": [
+    "integrated backend and frontend system"
+  ],
+  "rules": [
+    "keep backend, frontend, config, and docs separated",
+    "all subsystems must remain discoverable via metadata"
+  ],
+  "dependencies": [
+    "backend",
+    "frontend",
+    "config",
+    "docs"
+  ]
+}

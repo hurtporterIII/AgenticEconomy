@@ -1,0 +1,25 @@
+{
+  "name": "service.py",
+  "type": "file",
+  "description": "Handles paid external service calls",
+  "path": "C:\\Users\\Admin\\Desktop\\HACKATHON\\COmpatetion Folder\\AgenticEconomy\\backend\\actions\\service.py",
+  "role": "api_monetization",
+  "purpose": "Handles paid external service calls",
+  "inputs": [
+    "agent request",
+    "state"
+  ],
+  "outputs": [
+    "external data"
+  ],
+  "rules": [
+    "every call must cost <= 0.01",
+    "every call must trigger transaction",
+    "must log tx hash"
+  ],
+  "dependencies": [
+    "tx",
+    "bank",
+    "services"
+  ]
+}

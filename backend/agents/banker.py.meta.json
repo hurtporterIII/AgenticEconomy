@@ -1,0 +1,23 @@
+{
+  "name": "banker.py",
+  "type": "file",
+  "description": "Defines the decision policy and behavior contract for agent banker",
+  "path": "C:\\Users\\Admin\\Desktop\\HACKATHON\\COmpatetion Folder\\AgenticEconomy\\backend\\agents\\banker.py",
+  "role": "agent_policy",
+  "purpose": "Defines the decision policy and behavior contract for agent banker",
+  "inputs": [
+    "simulation state",
+    "execution context"
+  ],
+  "outputs": [
+    "agent action intent"
+  ],
+  "rules": [
+    "must emit deterministic event schema",
+    "must operate within tick boundaries"
+  ],
+  "dependencies": [
+    "actions",
+    "core.scheduler"
+  ]
+}

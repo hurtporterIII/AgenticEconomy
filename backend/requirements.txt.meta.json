@@ -1,0 +1,22 @@
+{
+  "name": "requirements.txt",
+  "type": "file",
+  "description": "Pins backend runtime libraries required for API and simulation",
+  "path": "C:\\Users\\Admin\\Desktop\\HACKATHON\\COmpatetion Folder\\AgenticEconomy\\backend\\requirements.txt",
+  "role": "dependency_manifest",
+  "purpose": "Pins backend runtime libraries required for API and simulation",
+  "inputs": [
+    "backend package requirements"
+  ],
+  "outputs": [
+    "installable dependency set"
+  ],
+  "rules": [
+    "must include only required runtime packages",
+    "versions should be deterministic"
+  ],
+  "dependencies": [
+    "pip",
+    "python runtime"
+  ]
+}

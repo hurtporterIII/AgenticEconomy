@@ -1,0 +1,31 @@
+{
+  "tick": 1,
+  "agents": {
+    "worker_1": {
+      "role": "worker",
+      "location": "mine",
+      "energy": 99
+    },
+    "thief_1": {
+      "role": "thief",
+      "location": "market",
+      "risk": 0.15
+    },
+    "cop_1": {
+      "role": "cop",
+      "location": "hq",
+      "focus": "thief_1"
+    },
+    "banker_1": {
+      "role": "banker",
+      "location": "bank",
+      "reserves": 10000
+    }
+  },
+  "metrics": {
+    "total_mined": 5,
+    "total_stolen": 3,
+    "total_recovered": 2
+  },
+  "updated_at": "2026-04-20T19:38:32.312187+00:00"
+}

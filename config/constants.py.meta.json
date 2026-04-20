@@ -1,0 +1,22 @@
+{
+  "name": "constants.py",
+  "type": "file",
+  "description": "Provides constants and pricing parameters for economic behaviors",
+  "path": "C:\\Users\\Admin\\Desktop\\HACKATHON\\COmpatetion Folder\\AgenticEconomy\\config\\constants.py",
+  "role": "config_module",
+  "purpose": "Provides constants and pricing parameters for economic behaviors",
+  "inputs": [
+    "system policy definitions"
+  ],
+  "outputs": [
+    "importable policy values"
+  ],
+  "rules": [
+    "values must remain deterministic",
+    "changes must preserve economy invariants"
+  ],
+  "dependencies": [
+    "backend actions",
+    "core"
+  ]
+}

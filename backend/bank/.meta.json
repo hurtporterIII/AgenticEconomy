@@ -1,0 +1,24 @@
+{
+  "name": "bank",
+  "type": "folder",
+  "description": "Groups bank responsibilities into a cohesive subsystem",
+  "path": "C:\\Users\\Admin\\Desktop\\HACKATHON\\COmpatetion Folder\\AgenticEconomy\\backend\\bank",
+  "role": "module_boundary",
+  "purpose": "Groups bank responsibilities into a cohesive subsystem",
+  "inputs": [
+    "upstream module outputs",
+    "project conventions"
+  ],
+  "outputs": [
+    "organized components",
+    "clear ownership boundaries"
+  ],
+  "rules": [
+    "keep related concerns co-located",
+    "preserve stable interfaces between modules"
+  ],
+  "dependencies": [
+    "backend",
+    "bank"
+  ]
+}
