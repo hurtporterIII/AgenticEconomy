@@ -6,3 +6,4 @@
 - balances.json.meta.json: Structured data or configuration.
 - bank.py: Python logic file for system behavior.
 - bank.py.meta.json: Structured data or configuration.
+- index.md.meta.json: Structured data or configuration.

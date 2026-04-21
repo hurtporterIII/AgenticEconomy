@@ -1,5 +1,9 @@
+from __future__ import annotations
+
 import os
 import random
+import json
+from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
 
@@ -18,6 +22,197 @@ ROLE_TO_SMALLVILLE = {
     "banker": "resident_banker",
     "bank": "landmark_bank",
 }
+TILE_SIZE = 32.0
+MAP_SUMMARY_PATH = Path(__file__).resolve().parents[1] / "store" / "map_summary.json"
+_MAP_LAYOUT_CACHE = None
+_SECTOR_CENTERS: dict[str, dict] = {}
+
+HOME_SECTORS = [
+    "Adam Smith's house",
+    "Yuriko Yamamoto's house",
+    "Moore family's house",
+    "Tamara Taylor and Carmen Ortiz's house",
+    "Moreno family's house",
+    "Lin family's house",
+    "Arthur Burton's apartment",
+    "Ryan Park's apartment",
+    "Isabella Rodriguez's apartment",
+    "Giorgio Rossi's apartment",
+    "Carlos Gomez's apartment",
+    "artist's co-living space",
+    "Dorm for Oak Hill College",
+]
+WORK_SECTORS = [
+    "Harvey Oak Supply Store",
+    "The Willows Market and Pharmacy",
+    "Hobbs Cafe",
+    "Oak Hill College",
+]
+BANK_SECTORS = [
+    "The Willows Market and Pharmacy",
+    "Harvey Oak Supply Store",
+]
+COP_PATROL_SECTORS = [
+    "Oak Hill College",
+    "The Willows Market and Pharmacy",
+    "Johnson Park",
+    "The Rose and Crown Pub",
+]
+
+
+def _load_map_layout() -> None:
+    global _MAP_LAYOUT_CACHE, _SECTOR_CENTERS
+    if _MAP_LAYOUT_CACHE is not None:
+        return
+    try:
+        data = json.loads(MAP_SUMMARY_PATH.read_text(encoding="utf-8"))
+        _MAP_LAYOUT_CACHE = data
+        _SECTOR_CENTERS = data.get("sector_centers", {})
+    except Exception:
+        _MAP_LAYOUT_CACHE = {}
+        _SECTOR_CENTERS = {}
+
+
+def _stable_lane_offset(actor_id: str, max_abs: int = 36) -> tuple[float, float]:
+    seed = sum(ord(ch) for ch in str(actor_id))
+    x = ((seed * 7) % (max_abs * 2 + 1)) - max_abs
+    y = ((seed * 11) % (max_abs * 2 + 1)) - max_abs
+    return float(x), float(y)
+
+
+def _home_coords(actor_id: str) -> tuple[float, float]:
+    _load_map_layout()
+    if not _SECTOR_CENTERS:
+        dx, dy = _stable_lane_offset(f"home:{actor_id}", max_abs=40)
+        return 640.0 + dx, 720.0 + dy
+    seed = sum(ord(ch) for ch in str(actor_id))
+    sector = HOME_SECTORS[seed % len(HOME_SECTORS)]
+    return _sector_point(sector, actor_id, spread=0.42)
+
+
+def _sector_point(sector_name: str, actor_id: str, spread: float = 0.35) -> tuple[float, float]:
+    _load_map_layout()
+    info = _SECTOR_CENTERS.get(sector_name)
+    if not info:
+        cx, cy = 80.0, 50.0
+        return (cx * TILE_SIZE, cy * TILE_SIZE)
+
+    bbox = info.get("bbox", [0, 0, int(info.get("cx", 80)), int(info.get("cy", 50))])
+    min_x, min_y, max_x, max_y = [float(v) for v in bbox]
+    center_x = float(info.get("cx", (min_x + max_x) / 2))
+    center_y = float(info.get("cy", (min_y + max_y) / 2))
+
+    width = max(1.0, max_x - min_x)
+    height = max(1.0, max_y - min_y)
+    dx, dy = _stable_lane_offset(f"{sector_name}:{actor_id}", max_abs=100)
+    nx = dx / 100.0
+    ny = dy / 100.0
+
+    tx = center_x + (nx * width * spread)
+    ty = center_y + (ny * height * spread)
+
+    tx = max(min_x + 0.25, min(max_x - 0.25, tx))
+    ty = max(min_y + 0.25, min(max_y - 0.25, ty))
+    return tx * TILE_SIZE, ty * TILE_SIZE
+
+
+def _pick_sector(sectors: list[str], actor_id: str) -> str:
+    seed = sum(ord(ch) for ch in str(actor_id))
+    return sectors[seed % len(sectors)]
+
+
+def _sector_footprint(sector_name: str) -> dict:
+    _load_map_layout()
+    info = _SECTOR_CENTERS.get(sector_name, {})
+    bbox = info.get("bbox", [0, 0, 0, 0])
+    min_tx, min_ty, max_tx, max_ty = [float(v) for v in bbox]
+    w_tiles = max(0.0, (max_tx - min_tx + 1.0))
+    h_tiles = max(0.0, (max_ty - min_ty + 1.0))
+    return {
+        "name": sector_name,
+        "tiles_bbox": {"min_x": min_tx, "min_y": min_ty, "max_x": max_tx, "max_y": max_ty},
+        "pixel_bbox": {
+            "min_x": min_tx * TILE_SIZE,
+            "min_y": min_ty * TILE_SIZE,
+            "max_x": (max_tx + 1.0) * TILE_SIZE,
+            "max_y": (max_ty + 1.0) * TILE_SIZE,
+        },
+        "center_tile": {"x": float(info.get("cx", 0.0) or 0.0), "y": float(info.get("cy", 0.0) or 0.0)},
+        "center_pixel": {
+            "x": float(info.get("cx", 0.0) or 0.0) * TILE_SIZE,
+            "y": float(info.get("cy", 0.0) or 0.0) * TILE_SIZE,
+        },
+        "tile_count": int(info.get("count", 0) or 0),
+        "approx_area_px2": w_tiles * h_tiles * (TILE_SIZE * TILE_SIZE),
+    }
+
+
+def _resolve_destination(entity: dict, latest_event: dict | None, entities: dict, tick: int) -> tuple[str, float, float]:
+    role = str(entity.get("type", "resident"))
+    action = _infer_actor_action(entity, latest_event)
+    entity_id = str(entity.get("id", ""))
+
+    if role == "worker":
+        route = str(entity.get("work_route", "") or "")
+        haul_mode = str(entity.get("haul_mode", "") or "")
+        # Bridge-mode visual commute: keeps workers moving between home/work
+        # even when latest economic events are sparse.
+        commute_phase = tick % 12
+        should_commute_to_work = commute_phase < 8
+        if haul_mode == "return_home" or route == "to_home":
+            zone = "home"
+            hx, hy = _home_coords(entity_id)
+            return zone, hx, hy
+        if action == "work" or (action == "idle" and should_commute_to_work):
+            sector = _pick_sector(WORK_SECTORS, entity_id)
+            x, y = _sector_point(sector, entity_id, spread=0.35)
+            return sector, x, y
+        if action == "bank":
+            sector = _pick_sector(BANK_SECTORS, entity_id)
+            x, y = _sector_point(sector, entity_id, spread=0.25)
+            return sector, x, y
+        zone = "home"
+        hx, hy = _home_coords(entity_id)
+        return zone, hx, hy
+
+    if role in {"bank", "banker"}:
+        sector = _pick_sector(BANK_SECTORS, entity_id)
+        x, y = _sector_point(sector, entity_id, spread=0.22)
+        return sector, x, y
+
+    if role == "thief":
+        target_id = entity.get("target") or (latest_event or {}).get("target_id")
+        target = entities.get(target_id) if target_id else None
+        if action == "chase" and target:
+            return "target", float(target.get("x", 0.0) or 0.0), float(target.get("y", 0.0) or 0.0)
+        if action == "steal":
+            target = entities.get((latest_event or {}).get("target_id"))
+            if target:
+                tx = float(target.get("x", 0.0) or 0.0)
+                ty = float(target.get("y", 0.0) or 0.0)
+                return "target", tx, ty
+            sector = _pick_sector(BANK_SECTORS + ["The Rose and Crown Pub"], entity_id)
+            x, y = _sector_point(sector, entity_id, spread=0.4)
+            return sector, x, y
+        if action == "bank":
+            sector = _pick_sector(BANK_SECTORS, entity_id)
+            x, y = _sector_point(sector, entity_id, spread=0.35)
+            return sector, x, y
+        hx, hy = _home_coords(entity_id)
+        return "home", hx, hy
+
+    if role == "cop":
+        target_id = entity.get("target") or (latest_event or {}).get("target_id")
+        target = entities.get(target_id) if target_id else None
+        if action == "chase" and target:
+            return "target", float(target.get("x", 0.0) or 0.0), float(target.get("y", 0.0) or 0.0)
+        idx = (tick // 3 + (sum(ord(ch) for ch in entity_id) % len(COP_PATROL_SECTORS))) % len(COP_PATROL_SECTORS)
+        sector = COP_PATROL_SECTORS[idx]
+        x, y = _sector_point(sector, entity_id, spread=0.42)
+        return sector, x, y
+
+    hx, hy = _home_coords(entity_id)
+    return "home", hx, hy
 
 
 def get_state():
@@ -31,17 +226,41 @@ def get_events():
 
 
 def _infer_actor_action(entity: dict, latest_event: dict | None) -> str:
+    role = str(entity.get("type", "resident"))
     event_type = str((latest_event or {}).get("type", ""))
-    if entity.get("type") == "cop" and entity.get("target"):
+    if role == "cop" and entity.get("target"):
         return "chase"
-    if event_type in {"steal_agent", "steal_bank"}:
-        return "steal"
-    if event_type == "worker_earn":
-        return "work"
+
+    if role == "worker":
+        if event_type == "worker_earn":
+            return "work"
+        if event_type.startswith("bank_"):
+            return "bank"
+        return "idle"
+
+    if role == "thief":
+        if event_type in {"steal_agent", "steal_bank"}:
+            return "steal"
+        if event_type == "thief_deposit":
+            return "bank"
+        if entity.get("target"):
+            return "chase"
+        return "idle"
+
+    if role == "cop":
+        if event_type in {"cop_chase"}:
+            return "chase"
+        if event_type in {"api_call", "cop_scan"}:
+            return "scan"
+        return "patrol"
+
+    if role in {"bank", "banker"}:
+        if event_type.startswith("bank_") or event_type in {"debit", "credit"}:
+            return "bank"
+        return "idle"
+
     if event_type.startswith("bank_") or event_type in {"debit", "credit"}:
         return "bank"
-    if event_type == "cop_chase":
-        return "chase"
     return "idle"
 
 
@@ -51,6 +270,7 @@ def build_smallville_frame(limit_events: int = 250):
     balances = shared.setdefault("balances", {})
     events = get_events()
     metrics = shared.setdefault("metrics", {})
+    tick = int(shared.setdefault("economy", {}).get("tick", 0))
 
     last_event_by_actor = {}
     for event in reversed(events):
@@ -63,6 +283,7 @@ def build_smallville_frame(limit_events: int = 250):
     for entity_id, entity in entities.items():
         latest_event = last_event_by_actor.get(entity_id)
         action = _infer_actor_action(entity, latest_event)
+        dest_zone, dest_x, dest_y = _resolve_destination(entity, latest_event, entities, tick)
         actor = {
             "id": entity_id,
             "persona_type": ROLE_TO_SMALLVILLE.get(entity.get("type"), "resident"),
@@ -73,11 +294,14 @@ def build_smallville_frame(limit_events: int = 250):
             "target_y": float(entity.get("target_y", entity.get("y", 0.0)) or 0.0),
             "target_id": entity.get("target"),
             "action": action,
+            "dest_zone": dest_zone,
+            "dest_x": float(dest_x),
+            "dest_y": float(dest_y),
             "top_action": entity.get("top_action"),
             "reflection": entity.get("reflection", "neutral"),
             "balance": float(balances.get(entity_id, 0.0) or 0.0),
             "status_line": (
-                f"{action} | {entity.get('reflection', 'neutral')}"
+                f"{action} | {entity.get('reflection', 'neutral')} | {dest_zone}"
             ),
         }
         actors.append(actor)
@@ -145,15 +369,23 @@ def spawn_entity(entity_id, entity_type, balance=0.0):
             "Delete existing agents or increase MAX_TOTAL_AGENTS."
         )
 
-    x = random.randint(50, 950)
-    y = random.randint(50, 550)
+    if entity_type in {"bank", "banker"}:
+        sx, sy = _sector_point(_pick_sector(BANK_SECTORS, entity_id), entity_id, spread=0.2)
+    elif entity_type == "worker":
+        sx, sy = _home_coords(entity_id)
+    elif entity_type == "thief":
+        sx, sy = _sector_point("The Rose and Crown Pub", entity_id, spread=0.45)
+    elif entity_type == "cop":
+        sx, sy = _sector_point("Oak Hill College", entity_id, spread=0.4)
+    else:
+        sx, sy = _home_coords(entity_id)
     entity = {
         "id": entity_id,
         "type": entity_type,
-        "x": float(x),
-        "y": float(y),
-        "target_x": float(x),
-        "target_y": float(y),
+        "x": float(sx),
+        "y": float(sy),
+        "target_x": float(sx),
+        "target_y": float(sy),
     }
     if entity_type == "cop":
         entity["target"] = None
@@ -299,3 +531,18 @@ def get_minds_endpoint(limit_memory: int = 8, limit_reflections: int = 5):
 @router.get("/bridge/smallville")
 def get_smallville_bridge_frame(limit_events: int = 250):
     return build_smallville_frame(limit_events=limit_events)
+
+
+@router.get("/map/areas")
+def get_map_areas_endpoint():
+    _load_map_layout()
+    sectors = {
+        "home_sectors": HOME_SECTORS,
+        "work_sectors": WORK_SECTORS,
+        "bank_sectors": BANK_SECTORS,
+        "cop_patrol_sectors": COP_PATROL_SECTORS,
+    }
+    return {
+        "map": (_MAP_LAYOUT_CACHE or {}).get("meta", {"w": 140, "h": 100, "tile": 32}),
+        "areas": {group: [_sector_footprint(name) for name in names] for group, names in sectors.items()},
+    }

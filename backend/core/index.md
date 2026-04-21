@@ -2,6 +2,7 @@
 
 ## Files
 - .meta.json: Structured data or configuration.
+- index.md.meta.json: Structured data or configuration.
 - loop.py: Python logic file for system behavior.
 - loop.py.meta.json: Structured data or configuration.
 - scheduler.py: Python logic file for system behavior.

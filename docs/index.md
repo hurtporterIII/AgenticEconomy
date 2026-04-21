@@ -8,3 +8,4 @@
 - demo.md.meta.json: Structured data or configuration.
 - feedback.md: Documentation file.
 - feedback.md.meta.json: Structured data or configuration.
+- index.md.meta.json: Structured data or configuration.

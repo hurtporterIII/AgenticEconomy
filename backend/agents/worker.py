@@ -1,3 +1,10 @@
+import math
+
+
+MINE_ZONE = (2032.0, 1524.0)
+MINE_WORK_RADIUS = 180.0
+
+
 def handle_worker(worker, state):
     """
     Executes worker behavior
@@ -35,11 +42,41 @@ def handle_worker(worker, state):
     action, action_weights = choose_action(worker, action_utilities, state=state, role="worker")
 
     if action == "work":
+        wx = float(worker.get("x", 0.0) or 0.0)
+        wy = float(worker.get("y", 0.0) or 0.0)
+        mine_distance = math.hypot(wx - MINE_ZONE[0], wy - MINE_ZONE[1])
+        if mine_distance > MINE_WORK_RADIUS:
+            # Workers only earn while physically at the mine/work zone.
+            worker["top_action"] = "commute_mine"
+            worker["work_route"] = "to_mine"
+            reinforce_action(
+                worker,
+                "idle",
+                -0.05,
+                state=state,
+                role="worker",
+                context={"regime": regime, "reason": "not_at_mine", "distance": round(mine_distance, 2)},
+            )
+            state.setdefault("events", []).append(
+                {
+                    "type": "worker_commute_mine",
+                    "worker_id": worker["id"],
+                    "distance_to_mine": round(mine_distance, 2),
+                    "regime": regime,
+                    "network": "Arc",
+                    "asset": "USDC",
+                }
+            )
+            return
+
         fee_tx = debit(worker["id"], cost, None)
         reward_tx = credit(worker["id"], reward, None)
         tax_tx = None
         if tax_amount > 0:
             tax_tx = debit(worker["id"], tax_amount, None)
+        worker["haul_mode"] = "return_home"
+        worker["work_route"] = "to_home"
+        worker["top_action"] = "return_home"
         net_gain = reward - cost - tax_amount
         reinforce_action(
             worker,

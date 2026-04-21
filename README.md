@@ -41,6 +41,38 @@ npm install
 npm run dev
 ```
 
+## Smallville-First Mode (Recommended Build Order)
+
+Run native Generative Agents first, then evolve with the economy bridge.
+
+1. Start Smallville environment server:
+```bash
+cd generative_agents/environment/frontend_server
+set SMALLVILLE_MODE=native
+python manage.py runserver 127.0.0.1:8010
+```
+2. Start Generative Agents simulation server:
+```bash
+cd generative_agents/reverie/backend_server
+set OPENAI_API_KEY=YOUR_OPENAI_KEY
+python reverie.py
+```
+3. In the `reverie.py` prompt:
+```text
+forked simulation: base_the_ville_n25
+new simulation: your_sim_name
+option: run 100
+```
+4. Open:
+```text
+http://127.0.0.1:8010/simulator_home
+```
+
+Bridge mode is optional for later evolution:
+```bash
+set SMALLVILLE_MODE=bridge
+```
+
 ## Agent Spawning And Cap
 
 - Players can add agents dynamically through `POST /api/spawn`.

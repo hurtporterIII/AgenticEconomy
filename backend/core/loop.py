@@ -1,17 +1,21 @@
 import random
+import math
 
 
-WORLD_MIN_X = 50.0
-WORLD_MAX_X = 950.0
-WORLD_MIN_Y = 50.0
-WORLD_MAX_Y = 550.0
+# Smallville map geometry: 140x100 tiles, 32px per tile.
+WORLD_MIN_X = 16.0
+WORLD_MAX_X = 4464.0
+WORLD_MIN_Y = 16.0
+WORLD_MAX_Y = 3184.0
 MOVE_LERP = 0.18
 
-WORK_ZONE = (200.0, 390.0)
-THIEF_ZONE = (530.0, 360.0)
-COP_ZONE = (870.0, 330.0)
-BANKER_ZONE = (690.0, 140.0)
-BANK_ZONE = (690.0, 220.0)
+# Anchors remapped to real Smallville sectors.
+WORK_ZONE = (2032.0, 1524.0)     # Harvey Oak Supply Store
+WORKER_HOME_ZONE = (2400.0, 2220.0)  # Residential home belt
+THIEF_ZONE = (1840.0, 708.0)     # The Rose and Crown Pub
+COP_ZONE = (3725.0, 837.0)       # Oak Hill College
+BANKER_ZONE = (2689.0, 1523.0)   # The Willows Market and Pharmacy
+BANK_ZONE = (2689.0, 1523.0)
 
 
 def _clamp_world(x, y):
@@ -32,7 +36,7 @@ def _ensure_spatial_fields(entity):
 
 def _home_zone(entity_type):
     if entity_type == "worker":
-        return WORK_ZONE
+        return WORKER_HOME_ZONE
     if entity_type == "thief":
         return THIEF_ZONE
     if entity_type == "cop":
@@ -40,6 +44,13 @@ def _home_zone(entity_type):
     if entity_type == "banker":
         return BANKER_ZONE
     return BANK_ZONE
+
+
+def _near(entity, target, radius):
+    ex = float(entity.get("x", 0.0) or 0.0)
+    ey = float(entity.get("y", 0.0) or 0.0)
+    tx, ty = float(target[0]), float(target[1])
+    return math.hypot(ex - tx, ey - ty) <= float(radius)
 
 
 def _find_target_entity(entities, target_id):
@@ -61,16 +72,43 @@ def _set_behavior_target(entity, entities):
     target_id = entity.get("target")
 
     if entity_type == "worker":
+        route = str(entity.get("work_route", "to_mine"))
+        haul_mode = str(entity.get("haul_mode", ""))
+
+        # After mining, workers must physically return home before next run.
+        if haul_mode == "return_home":
+            route = "to_home"
+        elif route not in {"to_mine", "to_home"}:
+            route = "to_mine"
+
         if "bank" in top_action:
             bank = _choose_entity_by_type(entities, "bank")
             if bank:
                 entity["target_x"], entity["target_y"] = _clamp_world(bank["x"], bank["y"])
                 return
-        if random.random() < 0.25:
+
+        if route == "to_mine":
             entity["target_x"], entity["target_y"] = _clamp_world(
                 WORK_ZONE[0] + random.uniform(-100, 100),
                 WORK_ZONE[1] + random.uniform(-70, 70),
             )
+            entity["work_route"] = "to_mine"
+            if _near(entity, WORK_ZONE, 120):
+                entity["at_mine"] = True
+            else:
+                entity["at_mine"] = False
+            return
+
+        home_zone = _home_zone(entity_type)
+        entity["target_x"], entity["target_y"] = _clamp_world(
+            home_zone[0] + random.uniform(-140, 140),
+            home_zone[1] + random.uniform(-90, 90),
+        )
+        entity["work_route"] = "to_home"
+        entity["at_mine"] = False
+        if _near(entity, home_zone, 140):
+            entity["haul_mode"] = ""
+            entity["work_route"] = "to_mine"
             return
 
     if entity_type == "thief":
