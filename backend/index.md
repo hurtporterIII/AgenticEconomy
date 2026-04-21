@@ -12,5 +12,8 @@
 - utils: Module for utils.
 
 ## Files
+- .meta.json: Structured data or configuration.
 - main.py: Python logic file for system behavior.
+- main.py.meta.json: Structured data or configuration.
 - requirements.txt: General file.
+- requirements.txt.meta.json: Structured data or configuration.

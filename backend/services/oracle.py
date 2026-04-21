@@ -4,7 +4,6 @@ import re
 from pathlib import Path
 
 import requests
-from tx.arc import submit_transaction
 
 try:
     from dotenv import load_dotenv
@@ -12,6 +11,7 @@ except Exception:
     load_dotenv = None
 
 USE_AI = True
+AI_PROVIDER = os.getenv("AI_PROVIDER", "auto").lower()
 
 if load_dotenv:
     root_env = Path(__file__).resolve().parents[2] / ".env"
@@ -108,6 +108,24 @@ def deepseek_decision(thieves):
 
 def decide_thief(state, thieves):
     """Provider router with fallback chain."""
+    if AI_PROVIDER == "gemini":
+        try:
+            result = gemini_decision(state, thieves)
+            if result:
+                return result, "gemini", "external"
+        except Exception as exc:
+            print("Gemini failed:", exc)
+        return random.choice(thieves).get("id"), "fallback", "fallback"
+
+    if AI_PROVIDER == "deepseek":
+        try:
+            result = deepseek_decision(thieves)
+            if result:
+                return result, "deepseek", "external"
+        except Exception as exc:
+            print("DeepSeek failed:", exc)
+        return random.choice(thieves).get("id"), "fallback", "fallback"
+
     try:
         result = gemini_decision(state, thieves)
         if result:
@@ -146,7 +164,8 @@ def locate_thief(state):
                 "provider": provider,
                 "mode": mode,
                 "thief_id": thief_id,
-                "tx_hash": submit_transaction("MASTER", "AI_SERVICE", 0),
+                # AI selection is accounted via the paid API call in actions/service.py.
+                "tx_hash": None,
                 "network": "Arc",
                 "asset": "USDC",
             }

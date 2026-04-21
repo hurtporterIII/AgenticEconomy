@@ -47,3 +47,34 @@ copilot-messages.log
 # System files
 .DS_Store
 .project/attachments/files/**
+Thumbs.db
+
+# Build and dependency outputs
+node_modules/
+dist/
+build/
+frontend/dist/
+frontend/node_modules/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Generated metadata/log noise
+*.meta.json
+*.meta.json.meta.json
+*.out.log
+*.err.log
+
+# Local env and scratch artifacts
+.env
+.env.*
+chaos_result.json
+chaos_local_result.json
+prelaunch_result.json
+
+# External/local workspaces not part of core repo
+generative_agents/
+wallet_setup/
+.project/
+.vscode/

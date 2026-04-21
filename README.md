@@ -1,2 +1,102 @@
 # AgenticEconomy
-Autonomous agent economy where agents earn, steal, enforce, and pay for intelligence using real-time micropayments and external AI decisions.
+
+AgenticEconomy is a live multi-agent economic simulation where autonomous agents earn, steal, enforce rules, purchase intelligence via API calls, and settle value with USDC on Arc.
+
+## What It Is
+
+- Autonomous agent economy with `worker`, `thief`, `cop`, and `bank` entities.
+- Economic loop where every valid value movement is priced and logged.
+- AI-powered target selection with provider fallback routing.
+- Arc settlement integration that returns verifiable `tx_hash` values for valid on-chain actions.
+- User-driven agent spawning with explicit role selection and a single global total-agent cap.
+
+## Demo Link
+
+- Demo video: `ADD_YOUR_DEMO_LINK_HERE`
+
+## How To Run
+
+1. Backend dependencies:
+```bash
+pip install -r backend/requirements.txt
+pip install circle-developer-controlled-wallets
+```
+2. Configure environment in [`.env`](C:\Users\Admin\Desktop\HACKATHON\COmpatetion Folder\AgenticEconomy\.env):
+```env
+CIRCLE_API_KEY=...
+CIRCLE_ENTITY_SECRET=...
+CIRCLE_WALLET_ADDRESS=...
+USDC_DESTINATION_ADDRESS=...
+DEEPSEEK_API_KEY=...
+GEMINI_API_KEY=...
+```
+3. Run backend demo loop:
+```bash
+python backend/main.py
+```
+4. Optional frontend:
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+## Agent Spawning And Cap
+
+- Players can add agents dynamically through `POST /api/spawn`.
+- Player selects the role via `entity_type` (`worker`, `thief`, `cop`, `banker`, `bank`).
+- `entity_id` is optional; if omitted, the system auto-generates IDs like `cop_1`, `worker_2`.
+- One global cap applies across all roles using `MAX_TOTAL_AGENTS` (default `200`).
+- On cap reached, API returns `409` with a clear message.
+
+Example spawn calls:
+
+```bash
+curl -X POST "http://127.0.0.1:8000/api/spawn?entity_type=cop&balance=1"
+curl -X POST "http://127.0.0.1:8000/api/spawn?entity_type=thief&entity_id=thief_alpha&balance=2"
+curl "http://127.0.0.1:8000/api/spawn/types"
+```
+
+## Arc + USDC Explanation
+
+- Valid economic actions settle on-chain using USDC on Arc through Circle developer-controlled wallet APIs.
+- Non-economic or invalid actions (for example `amount <= 0`) and insufficient-balance paths fall back to simulated hashes to keep the system stable.
+- This hybrid approach demonstrates real settlement while preserving high-frequency agent loop continuity.
+
+## Transaction Proof
+
+Example real transaction hashes produced in-system:
+
+- `0x566fade268170010cdb84327441a9feb54c5e304d97b415ded78420d6e320539`
+- `0x9dafa13063f9e6f601a8c2adcab2e2f39d75289d07d289e62b5f430b78daca53`
+- `0x006727621b1b2772743b9ca0e6a95a0a2660af89c73c362bf57233125827c24d`
+
+Standalone Arc proof transaction:
+
+- `0x22bded4d28dbe09889724214f124b5972b6b51df8ed9f341e5a907011d85c65e`
+- Explorer: [Arcscan](https://testnet.arcscan.app/tx/0x22bded4d28dbe09889724214f124b5972b6b51df8ed9f341e5a907011d85c65e)
+
+## Demo Narrative
+
+Use this line during judging:
+
+`Agents operate autonomously, earn and spend value, and settle valid transactions on-chain using USDC on Arc, with fallback handling for invalid states.`
+
+## Judges Summary
+
+AgenticEconomy is a real-time, AI-driven economic simulation where autonomous agents transact using sub-cent micropayments under dynamic policy regimes, with full visual, narrative, and transactional proof.
+
+What judges can verify live:
+
+- Autonomous roles: workers, thieves, cops, banker/bank.
+- Trait-based individuality: same-role agents are not clones.
+- Policy-to-behavior loop: `decline`, `police_state`, `growth`, `balanced`, `bootstrapping`.
+- Every meaningful action produces a transaction attempt and event record with `tx_hash`.
+- Full observability stack: event feed, metrics, story ticker, per-agent intent bars, regime narration, replay export.
+- Interactive controls: spawn population, tune doctrine, force scenarios, change speed, export replay.
+
+Core claim:
+
+`Every decision has a price, that price changes behavior, and that behavior reshapes the economy in real time.`
+
+See [Demo Script And Slide Notes](C:\Users\Admin\Desktop\HACKATHON\COmpatetion Folder\AgenticEconomy\docs\demo.md) for speaking flow.

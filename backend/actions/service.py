@@ -6,7 +6,12 @@ def call_service(agent, state):
     """
     Paid API call
     """
-    cost = 0.001
+    economy = state.setdefault("economy", {})
+    multipliers = economy.get("multipliers", {})
+    api_cost_multiplier = float(multipliers.get("api_cost", 1.0))
+    regime = economy.get("regime", "balanced")
+
+    cost = round(0.001 * api_cost_multiplier, 6)
     tx_hash = debit(agent["id"], cost, None)
     result = locate_thief(state)
 
@@ -16,6 +21,8 @@ def call_service(agent, state):
             "agent": agent["id"],
             "cost": cost,
             "result": result,
+            "regime": regime,
+            "api_cost_multiplier": api_cost_multiplier,
             "tx_hash": tx_hash,
             "network": "Arc",
             "asset": "USDC",
