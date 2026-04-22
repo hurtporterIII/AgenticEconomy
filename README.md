@@ -41,6 +41,34 @@ npm install
 npm run dev
 ```
 
+## Fast Ops Commands (Recommended)
+
+Use these scripts from the repository root to avoid manual startup drift.
+
+1. Start backend + Smallville bridge frontend + open map:
+```powershell
+powershell -ExecutionPolicy Bypass -File ".\start_smallville.ps1"
+```
+
+2. Verify full health (API + bridge + frontend + movement signal):
+```powershell
+powershell -ExecutionPolicy Bypass -File ".\health_smallville.ps1"
+```
+
+3. Stop both services (ports `8000` and `8010`):
+```powershell
+powershell -ExecutionPolicy Bypass -File ".\stop_smallville.ps1"
+```
+
+4. Rebuild all `index.md` and `.meta.json` files:
+```powershell
+powershell -ExecutionPolicy Bypass -File ".\reindex_structure.ps1"
+```
+
+Notes:
+- Do not run manual `uvicorn` / `manage.py` commands in parallel shells unless debugging.
+- Keep all API keys in [`.env`](C:\Users\Admin\Desktop\HACKATHON\COmpatetion Folder\AgenticEconomy\.env) only.
+
 ## Smallville-First Mode (Recommended Build Order)
 
 Run native Generative Agents first, then evolve with the economy bridge.

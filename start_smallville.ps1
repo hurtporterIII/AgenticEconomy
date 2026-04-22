@@ -16,6 +16,18 @@ function Test-PortListening([int]$Port) {
   }
 }
 
+function Stop-PortProcess([int]$Port) {
+  try {
+    $conns = Get-NetTCPConnection -LocalPort $Port -ErrorAction Stop
+    $pids = $conns | Select-Object -ExpandProperty OwningProcess -Unique
+    foreach ($pid in $pids) {
+      if ($pid -and $pid -ne $PID) {
+        try { Stop-Process -Id $pid -Force -ErrorAction Stop } catch {}
+      }
+    }
+  } catch {}
+}
+
 function Wait-Http([string]$Url, [int]$TimeoutSec = 25) {
   $start = Get-Date
   while (((Get-Date) - $start).TotalSeconds -lt $TimeoutSec) {
@@ -28,13 +40,27 @@ function Wait-Http([string]$Url, [int]$TimeoutSec = 25) {
   return $false
 }
 
+function Test-HttpQuick([string]$Url, [int]$TimeoutSec = 4) {
+  try {
+    $resp = Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec $TimeoutSec
+    return ($resp.StatusCode -ge 200 -and $resp.StatusCode -lt 500)
+  } catch {
+    return $false
+  }
+}
+
 if (-not (Test-Path $pythonExe)) { throw "Python not found at $pythonExe" }
 if (-not (Test-Path (Join-Path $backendDir 'main.py'))) { throw "backend/main.py not found in $backendDir" }
 if (-not (Test-Path (Join-Path $gaFrontendDir 'manage.py'))) { throw "manage.py not found in $gaFrontendDir" }
 
 # 1) Backend API
+if ((Test-PortListening $backendPort) -and (-not (Test-HttpQuick "http://127.0.0.1:$backendPort/api/state" 3))) {
+  Stop-PortProcess $backendPort
+  Start-Sleep -Milliseconds 600
+}
+
 if (-not (Test-PortListening $backendPort)) {
-  $backendCmd = "& `"$pythonExe`" -m uvicorn main:app --host 127.0.0.1 --port $backendPort"
+  $backendCmd = "`$env:TX_REAL_MODE='off'; `$env:SETTLEMENT_STRATEGY='off'; `$env:CIRCLE_POLL_ATTEMPTS='1'; & `"$pythonExe`" -m uvicorn main:app --host 127.0.0.1 --port $backendPort"
   Start-Process powershell -WorkingDirectory $backendDir -ArgumentList '-NoExit','-Command',$backendCmd | Out-Null
   Start-Sleep -Seconds 2
 }
@@ -70,6 +96,11 @@ try {
 } catch {}
 
 # 3) Smallville frontend in bridge mode
+if ((Test-PortListening $frontendPort) -and (-not (Test-HttpQuick "http://127.0.0.1:$frontendPort/simulator_home" 3))) {
+  Stop-PortProcess $frontendPort
+  Start-Sleep -Milliseconds 600
+}
+
 if (-not (Test-PortListening $frontendPort)) {
   $frontendCmd = "`$env:SMALLVILLE_MODE='bridge'; `$env:SMALLVILLE_BRIDGE_URL='http://127.0.0.1:$backendPort/api/bridge/smallville'; `$env:SMALLVILLE_BRIDGE_STEP_ON_POLL='1'; & `"$pythonExe`" manage.py runserver 127.0.0.1:$frontendPort"
   Start-Process powershell -WorkingDirectory $gaFrontendDir -ArgumentList '-NoExit','-Command',$frontendCmd | Out-Null

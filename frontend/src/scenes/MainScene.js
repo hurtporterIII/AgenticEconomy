@@ -445,17 +445,23 @@ export default class MainScene extends Phaser.Scene {
     for (const [id, view] of this.entities.entries()) {
       const entity = this.lastKnownState.entities[id];
       if (!entity) continue;
-      const dx = view.targetX - view.sprite.x;
-      const dy = view.targetY - view.sprite.y;
-      const near = Math.abs(dx) < 2 && Math.abs(dy) < 2;
+      const t = this.time.now * 0.001 + view.jitterX;
+      const wobbleX = Math.sin(t) * 15;
+      const wobbleY = Math.cos(t * 0.8) * 15;
+      const activeTargetX = view.targetX + wobbleX;
+      const activeTargetY = view.targetY + wobbleY;
+
+      const dx = activeTargetX - view.sprite.x;
+      const dy = activeTargetY - view.sprite.y;
+      const near = Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5;
       if (near) {
-        view.sprite.x = view.targetX;
-        view.sprite.y = view.targetY;
+        view.sprite.x = activeTargetX;
+        view.sprite.y = activeTargetY;
       } else {
         view.sprite.x += dx * 0.12;
         view.sprite.y += dy * 0.12;
       }
-      const moving = !near;
+      const moving = true;
       this.playState(id, view, moving, entity.type || "worker");
 
       if (dx < -1) view.sprite.setFlipX(true);

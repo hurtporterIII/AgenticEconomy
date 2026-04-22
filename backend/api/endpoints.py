@@ -58,6 +58,47 @@ COP_PATROL_SECTORS = [
     "Johnson Park",
     "The Rose and Crown Pub",
 ]
+MAP_ROAM_SECTORS = [
+    "Giorgio Rossi's apartment",
+    "Carlos Gomez's apartment",
+    "Arthur Burton's apartment",
+    "Ryan Park's apartment",
+    "Isabella Rodriguez's apartment",
+    "artist's co-living space",
+    "Hobbs Cafe",
+    "The Rose and Crown Pub",
+    "Oak Hill College",
+    "Dorm for Oak Hill College",
+    "Johnson Park",
+    "Harvey Oak Supply Store",
+    "The Willows Market and Pharmacy",
+    "Adam Smith's house",
+    "Yuriko Yamamoto's house",
+    "Moore family's house",
+    "Tamara Taylor and Carmen Ortiz's house",
+    "Moreno family's house",
+    "Lin family's house",
+]
+ENTRY_NAV_SECTORS = {
+    "Giorgio Rossi's apartment",
+    "Carlos Gomez's apartment",
+    "Arthur Burton's apartment",
+    "Ryan Park's apartment",
+    "Isabella Rodriguez's apartment",
+    "artist's co-living space",
+    "Hobbs Cafe",
+    "The Rose and Crown Pub",
+    "Oak Hill College",
+    "Dorm for Oak Hill College",
+    "Harvey Oak Supply Store",
+    "The Willows Market and Pharmacy",
+    "Adam Smith's house",
+    "Yuriko Yamamoto's house",
+    "Moore family's house",
+    "Tamara Taylor and Carmen Ortiz's house",
+    "Moreno family's house",
+    "Lin family's house",
+}
 
 
 def _load_map_layout() -> None:
@@ -87,7 +128,7 @@ def _home_coords(actor_id: str) -> tuple[float, float]:
         return 640.0 + dx, 720.0 + dy
     seed = sum(ord(ch) for ch in str(actor_id))
     sector = HOME_SECTORS[seed % len(HOME_SECTORS)]
-    return _sector_point(sector, actor_id, spread=0.42)
+    return _sector_nav_point(sector, actor_id)
 
 
 def _sector_point(sector_name: str, actor_id: str, spread: float = 0.35) -> tuple[float, float]:
@@ -116,9 +157,134 @@ def _sector_point(sector_name: str, actor_id: str, spread: float = 0.35) -> tupl
     return tx * TILE_SIZE, ty * TILE_SIZE
 
 
+def _sector_entry_point(sector_name: str, actor_id: str) -> tuple[float, float]:
+    """Return a walkable approach point near a sector's likely entrance."""
+    _load_map_layout()
+    info = _SECTOR_CENTERS.get(sector_name)
+    if not info:
+        return _sector_point(sector_name, actor_id, spread=0.25)
+
+    bbox = info.get("bbox", [0, 0, int(info.get("cx", 80)), int(info.get("cy", 50))])
+    min_x, min_y, max_x, max_y = [float(v) for v in bbox]
+    center_x = float(info.get("cx", (min_x + max_x) / 2))
+    width = max(1.0, max_x - min_x)
+    dx, _ = _stable_lane_offset(f"entry:{sector_name}:{actor_id}", max_abs=100)
+    x_jitter = (dx / 100.0) * width * 0.18
+
+    # Most building doors in this tileset are on the south edge.
+    tx = max(min_x + 0.6, min(max_x - 0.6, center_x + x_jitter))
+    ty = max_y + 1.25
+
+    map_meta = (_MAP_LAYOUT_CACHE or {}).get("meta", {})
+    map_w = float(map_meta.get("w", 140) or 140)
+    map_h = float(map_meta.get("h", 100) or 100)
+    tx = max(0.5, min(map_w - 0.5, tx))
+    ty = max(0.5, min(map_h - 0.5, ty))
+    return tx * TILE_SIZE, ty * TILE_SIZE
+
+
+def _sector_nav_point(sector_name: str, actor_id: str) -> tuple[float, float]:
+    if sector_name in ENTRY_NAV_SECTORS:
+        return _sector_entry_point(sector_name, actor_id)
+    return _sector_point(sector_name, actor_id, spread=0.35)
+
+
 def _pick_sector(sectors: list[str], actor_id: str) -> str:
     seed = sum(ord(ch) for ch in str(actor_id))
     return sectors[seed % len(sectors)]
+
+
+def _pick_sector_cycle(sectors: list[str], actor_id: str, tick: int, cadence: int = 8) -> str:
+    if not sectors:
+        return "Johnson Park"
+    seed = sum(ord(ch) for ch in str(actor_id)) % len(sectors)
+    step_idx = max(0, tick // max(1, cadence))
+    return sectors[(seed + step_idx) % len(sectors)]
+
+
+def _bridge_roam_goal(
+    entity: dict,
+    actor_id: str,
+    tick: int,
+    sectors: list[str],
+    label: str,
+    hold_ticks: int = 18,
+    force_retarget: bool = False,
+) -> tuple[str, float, float]:
+    """
+    Sticky map-wide roaming target for bridge visualization.
+    Prevents rapid per-tick retargeting that causes circular jitter.
+    """
+    if not sectors:
+        sx, sy = _sector_nav_point("Johnson Park", actor_id)
+        return "Johnson Park", sx, sy
+
+    key_prefix = f"bridge_goal_{label}"
+    idx_key = f"{key_prefix}_idx"
+    until_key = f"{key_prefix}_until"
+    zone_key = f"{key_prefix}_zone"
+    x_key = f"{key_prefix}_x"
+    y_key = f"{key_prefix}_y"
+
+    idx = int(entity.get(idx_key, sum(ord(ch) for ch in actor_id) % len(sectors)))
+    until_tick = int(entity.get(until_key, -1))
+
+    if force_retarget or tick >= until_tick or zone_key not in entity:
+        idx = (idx + 1) % len(sectors)
+        zone = sectors[idx]
+        x, y = _sector_nav_point(zone, actor_id)
+        entity[idx_key] = idx
+        entity[until_key] = tick + max(6, int(hold_ticks))
+        entity[zone_key] = zone
+        entity[x_key] = float(x)
+        entity[y_key] = float(y)
+
+    return (
+        str(entity.get(zone_key)),
+        float(entity.get(x_key, 0.0) or 0.0),
+        float(entity.get(y_key, 0.0) or 0.0),
+    )
+
+
+def _bridge_stuck_retarget(entity: dict, actor_id: str, action: str, tick: int) -> bool:
+    """
+    Detect agents that are effectively parked and request a new roam goal.
+    Exempts active interaction states to avoid interrupting real actions.
+    """
+    active_actions = {"chase", "steal", "bank", "scan", "work"}
+    if action in active_actions:
+        entity["bridge_stuck_count"] = 0
+        entity["bridge_stuck_last_tick"] = tick
+        entity["bridge_stuck_last_x"] = float(entity.get("x", 0.0) or 0.0)
+        entity["bridge_stuck_last_y"] = float(entity.get("y", 0.0) or 0.0)
+        return False
+
+    x = float(entity.get("x", 0.0) or 0.0)
+    y = float(entity.get("y", 0.0) or 0.0)
+    prev_tick = int(entity.get("bridge_stuck_last_tick", tick))
+    prev_x = float(entity.get("bridge_stuck_last_x", x) or x)
+    prev_y = float(entity.get("bridge_stuck_last_y", y) or y)
+
+    # Ignore duplicate checks inside the same tick.
+    if tick == prev_tick:
+        return False
+
+    delta = abs(x - prev_x) + abs(y - prev_y)
+    stuck_count = int(entity.get("bridge_stuck_count", 0))
+    if delta <= 3.0:
+        stuck_count += 1
+    else:
+        stuck_count = 0
+
+    entity["bridge_stuck_count"] = stuck_count
+    entity["bridge_stuck_last_tick"] = tick
+    entity["bridge_stuck_last_x"] = x
+    entity["bridge_stuck_last_y"] = y
+
+    if stuck_count >= 4:
+        entity["bridge_stuck_count"] = 0
+        return True
+    return False
 
 
 def _sector_footprint(sector_name: str) -> dict:
@@ -151,34 +317,22 @@ def _resolve_destination(entity: dict, latest_event: dict | None, entities: dict
     role = str(entity.get("type", "resident"))
     action = _infer_actor_action(entity, latest_event)
     entity_id = str(entity.get("id", ""))
+    force_retarget = _bridge_stuck_retarget(entity, entity_id, action, tick)
 
     if role == "worker":
-        route = str(entity.get("work_route", "") or "")
-        haul_mode = str(entity.get("haul_mode", "") or "")
-        # Bridge-mode visual commute: keeps workers moving between home/work
-        # even when latest economic events are sparse.
-        commute_phase = tick % 12
-        should_commute_to_work = commute_phase < 8
-        if haul_mode == "return_home" or route == "to_home":
-            zone = "home"
-            hx, hy = _home_coords(entity_id)
-            return zone, hx, hy
-        if action == "work" or (action == "idle" and should_commute_to_work):
-            sector = _pick_sector(WORK_SECTORS, entity_id)
-            x, y = _sector_point(sector, entity_id, spread=0.35)
-            return sector, x, y
+        if action == "work":
+            return _bridge_roam_goal(entity, entity_id, tick, WORK_SECTORS, "work", hold_ticks=16)
         if action == "bank":
-            sector = _pick_sector(BANK_SECTORS, entity_id)
-            x, y = _sector_point(sector, entity_id, spread=0.25)
-            return sector, x, y
-        zone = "home"
-        hx, hy = _home_coords(entity_id)
-        return zone, hx, hy
+            return _bridge_roam_goal(entity, entity_id, tick, BANK_SECTORS, "bank", hold_ticks=14)
+        return _bridge_roam_goal(
+            entity, entity_id, tick, MAP_ROAM_SECTORS, "roam", hold_ticks=14, force_retarget=force_retarget
+        )
 
     if role in {"bank", "banker"}:
-        sector = _pick_sector(BANK_SECTORS, entity_id)
-        x, y = _sector_point(sector, entity_id, spread=0.22)
-        return sector, x, y
+        banker_sectors = BANK_SECTORS + WORK_SECTORS + ["Johnson Park", "Hobbs Cafe"]
+        return _bridge_roam_goal(
+            entity, entity_id, tick, banker_sectors, "banker", hold_ticks=20, force_retarget=force_retarget
+        )
 
     if role == "thief":
         target_id = entity.get("target") or (latest_event or {}).get("target_id")
@@ -191,28 +345,26 @@ def _resolve_destination(entity: dict, latest_event: dict | None, entities: dict
                 tx = float(target.get("x", 0.0) or 0.0)
                 ty = float(target.get("y", 0.0) or 0.0)
                 return "target", tx, ty
-            sector = _pick_sector(BANK_SECTORS + ["The Rose and Crown Pub"], entity_id)
-            x, y = _sector_point(sector, entity_id, spread=0.4)
-            return sector, x, y
+            return _bridge_roam_goal(entity, entity_id, tick, BANK_SECTORS + ["The Rose and Crown Pub"], "steal", hold_ticks=10)
         if action == "bank":
-            sector = _pick_sector(BANK_SECTORS, entity_id)
-            x, y = _sector_point(sector, entity_id, spread=0.35)
-            return sector, x, y
-        hx, hy = _home_coords(entity_id)
-        return "home", hx, hy
+            return _bridge_roam_goal(entity, entity_id, tick, BANK_SECTORS, "bank", hold_ticks=12)
+        return _bridge_roam_goal(
+            entity, entity_id, tick, MAP_ROAM_SECTORS, "roam", hold_ticks=10, force_retarget=force_retarget
+        )
 
     if role == "cop":
         target_id = entity.get("target") or (latest_event or {}).get("target_id")
         target = entities.get(target_id) if target_id else None
         if action == "chase" and target:
             return "target", float(target.get("x", 0.0) or 0.0), float(target.get("y", 0.0) or 0.0)
-        idx = (tick // 3 + (sum(ord(ch) for ch in entity_id) % len(COP_PATROL_SECTORS))) % len(COP_PATROL_SECTORS)
-        sector = COP_PATROL_SECTORS[idx]
-        x, y = _sector_point(sector, entity_id, spread=0.42)
-        return sector, x, y
+        patrol_sectors = COP_PATROL_SECTORS + MAP_ROAM_SECTORS
+        return _bridge_roam_goal(
+            entity, entity_id, tick, patrol_sectors, "patrol", hold_ticks=10, force_retarget=force_retarget
+        )
 
-    hx, hy = _home_coords(entity_id)
-    return "home", hx, hy
+    return _bridge_roam_goal(
+        entity, entity_id, tick, MAP_ROAM_SECTORS, "default", hold_ticks=14, force_retarget=force_retarget
+    )
 
 
 def get_state():
@@ -264,7 +416,7 @@ def _infer_actor_action(entity: dict, latest_event: dict | None) -> str:
     return "idle"
 
 
-def build_smallville_frame(limit_events: int = 250):
+def build_smallville_frame(limit_events: int = 250, include_debug: bool = False):
     shared = get_state()
     entities = shared.setdefault("entities", {})
     balances = shared.setdefault("balances", {})
@@ -306,8 +458,7 @@ def build_smallville_frame(limit_events: int = 250):
         }
         actors.append(actor)
 
-    event_limit = max(1, min(int(limit_events), 1000))
-    return {
+    payload = {
         "world": {
             "name": "AgenticEconomy-SmallvilleBridge",
             "tick": int(shared.setdefault("economy", {}).get("tick", 0)),
@@ -322,15 +473,17 @@ def build_smallville_frame(limit_events: int = 250):
             "cost_per_action": float(metrics.get("cost_per_action", 0.0) or 0.0),
             "success_rate": float(metrics.get("success_rate", 0.0) or 0.0),
         },
-        "events": events[-event_limit:],
-        # Compatibility mirror for the current Phaser scene.
-        "state": {
+    }
+    if include_debug:
+        event_limit = max(1, min(int(limit_events), 1000))
+        payload["events"] = events[-event_limit:]
+        payload["state"] = {
             "entities": entities,
             "balances": balances,
             "metrics": metrics,
             "economy": shared.setdefault("economy", default_economy_state()),
-        },
-    }
+        }
+    return payload
 
 
 def step():
@@ -529,8 +682,8 @@ def get_minds_endpoint(limit_memory: int = 8, limit_reflections: int = 5):
 
 
 @router.get("/bridge/smallville")
-def get_smallville_bridge_frame(limit_events: int = 250):
-    return build_smallville_frame(limit_events=limit_events)
+def get_smallville_bridge_frame(limit_events: int = 250, include_debug: bool = False):
+    return build_smallville_frame(limit_events=limit_events, include_debug=include_debug)
 
 
 @router.get("/map/areas")
@@ -541,6 +694,7 @@ def get_map_areas_endpoint():
         "work_sectors": WORK_SECTORS,
         "bank_sectors": BANK_SECTORS,
         "cop_patrol_sectors": COP_PATROL_SECTORS,
+        "map_roam_sectors": MAP_ROAM_SECTORS,
     }
     return {
         "map": (_MAP_LAYOUT_CACHE or {}).get("meta", {"w": 140, "h": 100, "tile": 32}),

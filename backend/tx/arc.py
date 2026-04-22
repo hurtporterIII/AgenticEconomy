@@ -143,7 +143,7 @@ def _env_config():
         "entity_secret": os.getenv("CIRCLE_ENTITY_SECRET"),
         "wallet_address": os.getenv("CIRCLE_WALLET_ADDRESS"),
         "destination_address": os.getenv("USDC_DESTINATION_ADDRESS"),
-        "host": os.getenv("CIRCLE_W3S_BASE_URL", "https://api.circle.com"),
+        "host": os.getenv("CIRCLE_W3S_BASE_URL") or os.getenv("CIRCLE_BASE_URL", "https://api.circle.com"),
         "blockchain": os.getenv("CIRCLE_BLOCKCHAIN", "ARC-TESTNET"),
         "token_address": os.getenv("CIRCLE_USDC_TOKEN_ADDRESS", ARC_TESTNET_USDC),
         "fee_level": os.getenv("CIRCLE_FEE_LEVEL", "LOW"),
