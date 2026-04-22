@@ -1,5 +1,13 @@
 # AgenticEconomy
 
+Path: `AgenticEconomy`
+
+## Summary
+- Subfolders: 0
+- Files: 3
+- File types: <none>:2, .md:1
+
 ## Files
-- LICENSE: General file.
-- README.md: Documentation file.
+- .gitattributes: General file artifact.
+- LICENSE: General file artifact.
+- README.md: Documentation or notes.

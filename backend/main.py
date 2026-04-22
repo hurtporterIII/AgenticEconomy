@@ -1,4 +1,7 @@
 from fastapi import FastAPI
+import os
+import threading
+import time
 
 from api.endpoints import router
 from core.loop import run_loop
@@ -9,6 +12,37 @@ def create_app():
     """Create minimal HTTP app for demo endpoints."""
     app = FastAPI(title="AgenticEconomy Demo API")
     app.include_router(router)
+
+    auto_tick_enabled = os.getenv("AUTO_TICK_ENABLED", "1") == "1"
+    auto_tick_ms = max(50, int(os.getenv("AUTO_TICK_MS", "250")))
+    stop_event = threading.Event()
+
+    def _auto_tick_loop():
+        interval = auto_tick_ms / 1000.0
+        while not stop_event.is_set():
+            try:
+                run_loop(state)
+            except Exception:
+                pass
+            stop_event.wait(interval)
+
+    @app.on_event("startup")
+    def _startup_tick():
+        if not auto_tick_enabled:
+            return
+        if getattr(app.state, "tick_thread", None) and app.state.tick_thread.is_alive():
+            return
+        app.state.stop_event = stop_event
+        app.state.tick_thread = threading.Thread(target=_auto_tick_loop, daemon=True, name="agentic-auto-tick")
+        app.state.tick_thread.start()
+
+    @app.on_event("shutdown")
+    def _shutdown_tick():
+        try:
+            app.state.stop_event.set()
+        except Exception:
+            pass
+
     return app
 
 

@@ -1,0 +1,968 @@
+{% load staticfiles %}
+
+<div id="step" style="display:none">{{step}}</div>
+<div id="sim_code" style="display:none">{{sim_code}}</div>
+<div id="persona_name_list" style="display:none">{{persona_name_str}}</div>
+<div id="persona_init_pos" style="display:none">
+	{% for i in persona_init_pos %}
+		<span>{{i.0}},{{i.1}},{{i.2}}</span>
+	{% endfor %}
+</div>
+
+<script type="text/javascript">
+	/*
+	  Main resources: 
+	  https://www.youtube.com/watch?v=cKIG1lKwLeo&t=401s&ab_channel=HongLy
+	  For the ground zero code, see the exported files from here: 
+	  https://codepen.io/mikewesthad/pen/BVeoYP?editors=1111 
+
+	  Also worth taking a look: 
+	  https://www.youtube.com/watch?v=fdXcD9X4NrQ&ab_channel=MorganPage
+	  and 
+	  https://www.youtube.com/watch?v=MR2CvWxOEsw&ab_channel=MattWilber
+	 */
+
+
+	// ###########################################################################
+	// PREAMBLE
+	// ###########################################################################
+
+	// <step> -- one full loop around all three phases determined by <phase> is 
+	// a step. We use this to link the steps in the backend. 
+	let step = parseInt(document.getElementById('step').innerHTML);
+	let sim_code = document.getElementById('sim_code').innerHTML.trim();
+	let bridge_mode = (sim_code === "bridge_smallville");
+	// let persona_names = document.getElementById('persona_name_list').innerHTML.split(",");
+
+	let spans = document.getElementById('persona_init_pos').getElementsByTagName('span');
+	let persona_names = {};
+	for(var i = 0, l = spans.length; i < l; i++){
+		let x = spans[i].innerText.split(",");
+		persona_names[x[0]] = [parseInt(x[1]), parseInt(x[2])]
+	}
+
+
+	// Phaser 3.0 global settings. 
+	// Configuration meant to be passed to the main Phaser game instance. 
+	const config = {
+	  type: Phaser.AUTO,
+	  width: 1500,
+	  height: 800,
+	  parent: "game-container",
+	  pixelArt: true,
+	  physics: {
+	    default: "arcade",
+	    arcade: {
+	      gravity: { y: 0 } } },
+	  scene: {
+	    preload: preload,
+	    create: create,
+	    update: update } };
+
+	// const config = {
+	//   type: Phaser.AUTO,
+	//   width: 4480,
+	//   height: 3200,
+	//   parent: "game-container",
+	//   pixelArt: true,
+	//   physics: {
+	//     default: "arcade",
+	//     arcade: {
+	//       gravity: { y: 0 } } },
+	//   scene: {
+	//     preload: preload,
+	//     create: create,
+	//     update: update },
+	//   scale: {zoom: 0.5} };
+
+	// Creating the game instance and setting up the main Phaser variables that  
+	// will be used in it. 
+	const game = new Phaser.Game(config);
+	let cursors;
+	let player;
+	let showDebug = false;
+
+	// Persona related variables. This should have the name of the persona as its 
+	// keys, and the instances of the Persona class as the values.
+	const MAX_VISIBLE_PERSONAS = 6;
+	var spawn_tile_loc = {};
+	// for (var i = 0; i < persona_names.length; i++) { 
+	// 	spawn_tile_loc[persona_names[i]] = [0, 0]
+	// }
+
+	function personaRoleKey(name) {
+		let n = (name || "").toLowerCase();
+		if (n.startsWith("worker")) return "worker";
+		if (n.startsWith("cop")) return "cop";
+		if (n.startsWith("spy")) return "spy";
+		if (n.startsWith("banker")) return "banker";
+		if (n.startsWith("bank")) return "bank";
+		if (n.startsWith("thief")) return "thief";
+		return "other";
+	}
+	function chooseVisiblePersonas(allNames, maxCount) {
+		let buckets = { worker: [], cop: [], banker: [], spy: [], bank: [], thief: [], other: [] };
+		allNames.forEach(function(name){ buckets[personaRoleKey(name)].push(name); });
+		let picks = [];
+		function take(bucket, count) {
+			for (let i = 0; i < count && buckets[bucket].length > 0 && picks.length < maxCount; i++) {
+				picks.push(buckets[bucket].shift());
+			}
+		}
+		// Demo-first lineup: 2 workers + 1 cop + 1 banker + 1 spy + 1 thief.
+		take("worker", 2);
+		take("cop", 1);
+		take("banker", 1);
+		take("spy", 1);
+		take("thief", 1);
+		["worker", "cop", "banker", "spy", "bank", "thief", "other"].forEach(function(bucket){
+			while (buckets[bucket].length > 0 && picks.length < maxCount) picks.push(buckets[bucket].shift());
+		});
+		return picks;
+	}
+	let visiblePersonaNames = chooseVisiblePersonas(Object.keys(persona_names), MAX_VISIBLE_PERSONAS);
+	visiblePersonaNames.forEach(function(key){ spawn_tile_loc[key] = persona_names[key]; });
+	console.log(spawn_tile_loc);
+
+	var personas = {};
+	var pronunciatios = {};
+	var role_titles = {};
+	let anims_direction;
+	let pre_anims_direction;
+	let pre_anims_direction_dict = {};
+
+	let curr_maze = "the_ville";
+
+	// <tile_width> is the width of one individual tile (tiles are square)
+	let tile_width = 32;
+	// Important: tile_width % movement_speed has to be 0. 
+	// <movement_speed> determines how fast we move at each upate cylce. 
+	let movement_speed = 8; 
+
+	// <timer_max> determines how frequently our update function will query the 
+	// frontend server. If it's higher, we wait longer cycles. 
+	let timer_max = 4;
+	let timer = timer_max;
+
+	// <phase> -- there are three phases: "process," "update," and "execute."
+	let phase = "update"; // or "update" or "execute"
+
+	function roleTitleFromName(name) {
+		let n = (name || "").toLowerCase();
+		if (n.startsWith("worker")) return "Worker";
+		if (n.startsWith("thief")) return "Thief";
+		if (n.startsWith("cop")) return "Cop";
+		if (n.startsWith("spy")) return "Spy";
+		if (n.startsWith("banker")) return "Banker";
+		if (n.startsWith("bank")) return "Bank";
+		return "Agent";
+	}
+
+	function roleTitleFromPayloadRole(role) {
+		let r = (role || "").toLowerCase();
+		if (r === "worker") return "Worker";
+		if (r === "thief") return "Thief";
+		if (r === "cop") return "Cop";
+		if (r === "spy") return "Spy";
+		if (r === "banker") return "Banker";
+		if (r === "bank") return "Bank";
+		return "Agent";
+	}
+
+	// Variables for storing movements that are sent from the backend server.
+	let execute_movement;
+	let execute_count_max = tile_width/movement_speed;
+	let execute_count = execute_count_max;
+	let movement_target = {};
+	let bridge_target = {};
+	let bridge_destination = {};
+	let bridge_velocity = {};
+	let bridge_last_update_ms = {};
+	const bridge_lerp = 0.22;
+	const bridge_arrival_epsilon = 1.2;
+	const bridge_target_blend = 0.72;
+	const bridge_predict_ms = 900;
+	const bridge_max_step = 3.2;
+	const bridge_steady_step = 2.1;
+	const bridge_stale_ms = 420;
+	let bridge_collision_layer = null;
+	let bridge_wall_layer = null;
+	let bridge_interior_ground_layer = null;
+	let bridge_exterior_ground_layer = null;
+	let bridge_block_layers = [];
+	let bridge_map_width_tiles = 0;
+	let bridge_map_height_tiles = 0;
+	const bridge_body_half_w = 11;
+	const bridge_body_half_h = 14;
+	let bridge_paths = {};
+	let bridge_last_path_update_ms = {};
+	const bridge_repath_interval_ms = 900;
+	const bridge_allow_wall_doors = false;
+	const bridge_show_building_labels = true;
+	const bridge_building_labels = [
+		{ id: "B01", name: "Isabella Apt", tx: 77.57, ty: 14.70 },
+		{ id: "B02", name: "Arthur Apt", tx: 57.50, ty: 15.22 },
+		{ id: "B03", name: "Giorgio Apt", tx: 88.00, ty: 18.50 },
+		{ id: "B04", name: "Carlos Apt", tx: 95.00, ty: 18.50 },
+		{ id: "B05", name: "Ryan Apt", tx: 67.00, ty: 19.50 },
+		{ id: "B06", name: "Hobbs Cafe | Spy Home", tx: 77.47, ty: 21.62 },
+		{ id: "B07", name: "Rose Crown Pub | Thief Home", tx: 57.50, ty: 22.13 },
+		{ id: "B08", name: "Artists Co-Living | Worker Home", tx: 28.47, ty: 25.10 },
+		{ id: "B09", name: "Oak Hill College | Cop Home", tx: 116.42, ty: 26.17 },
+		{ id: "B10", name: "Johnson Park", tx: 27.50, ty: 46.00 },
+		{ id: "B11", name: "Willows Market | Worker Work", tx: 84.04, ty: 47.59 },
+		{ id: "B12", name: "Harvey Supply | Bank Home", tx: 63.50, ty: 47.62 },
+		{ id: "B13", name: "Oak Dorm", tx: 120.15, ty: 50.05 },
+		{ id: "B14", name: "Adam House", tx: 21.99, ty: 64.13 },
+		{ id: "B15", name: "Yuriko House", tx: 29.99, ty: 64.13 },
+		{ id: "B16", name: "Moore House", tx: 37.99, ty: 64.13 },
+		{ id: "B17", name: "Moreno House", tx: 74.51, ty: 72.42 },
+		{ id: "B18", name: "Lin House", tx: 92.51, ty: 72.42 },
+		{ id: "B19", name: "Tamara-Carmen House", tx: 56.46, ty: 72.46 }
+	];
+	
+
+	// ###########################################################################
+	// ENGINE
+	// ###########################################################################
+
+	function bridge_tile_present(layer, tx, ty) {
+		if (!layer) return false;
+		let t = layer.getTileAt(tx, ty, false);
+		return !!(t && t.index !== -1);
+	}
+
+	function bridge_is_door_tile(tx, ty) {
+		if (!bridge_wall_layer) return false;
+		let wallTile = bridge_wall_layer.getTileAt(tx, ty, false);
+		if (!wallTile || wallTile.index === -1) return false;
+
+		let hasInterior = false;
+		let hasExterior = false;
+		let neighbors = [[tx + 1, ty], [tx - 1, ty], [tx, ty + 1], [tx, ty - 1]];
+		for (let i = 0; i < neighbors.length; i++) {
+			let nx = neighbors[i][0], ny = neighbors[i][1];
+			if (nx < 0 || ny < 0 || nx >= bridge_map_width_tiles || ny >= bridge_map_height_tiles) continue;
+			if (bridge_tile_present(bridge_interior_ground_layer, nx, ny)) hasInterior = true;
+			if (bridge_tile_present(bridge_exterior_ground_layer, nx, ny)) hasExterior = true;
+		}
+		return hasInterior && hasExterior;
+	}
+
+	function bridge_tile_blocked(x, y) {
+		let tx = Math.floor(x / tile_width);
+		let ty = Math.floor(y / tile_width);
+		if (tx < 0 || ty < 0 || tx >= bridge_map_width_tiles || ty >= bridge_map_height_tiles) return true;
+		for (let i = 0; i < bridge_block_layers.length; i++) {
+			let layer = bridge_block_layers[i];
+			if (!layer) continue;
+			let tile = layer.getTileAt(tx, ty, false);
+			if (!tile) continue;
+			// Layer 0 is the dedicated collision layer: block only explicit colliders.
+			if (i === 0) {
+				if (tile.collides) return true;
+			} else {
+				// Optional wall-door exception (off by default for stricter wall adherence).
+				if (bridge_allow_wall_doors && layer === bridge_wall_layer && bridge_is_door_tile(tx, ty)) continue;
+				// Other solid layers (if enabled): any tile is blocking.
+				if (tile.index !== -1) return true;
+			}
+		}
+		return false;
+	}
+
+	function bridge_can_occupy(x, y) {
+		let checks = [
+			[x, y],
+			[x - bridge_body_half_w, y],
+			[x + bridge_body_half_w, y],
+			[x, y - bridge_body_half_h],
+			[x, y + bridge_body_half_h],
+			[x - bridge_body_half_w, y - bridge_body_half_h],
+			[x + bridge_body_half_w, y - bridge_body_half_h],
+			[x - bridge_body_half_w, y + bridge_body_half_h],
+			[x + bridge_body_half_w, y + bridge_body_half_h]
+		];
+		for (let i = 0; i < checks.length; i++) {
+			if (bridge_tile_blocked(checks[i][0], checks[i][1])) return false;
+		}
+		return true;
+	}
+
+	function bridge_world_to_tile(x, y) { return [Math.floor(x / tile_width), Math.floor(y / tile_width)]; }
+	function bridge_tile_to_world(tx, ty) { return [tx * tile_width + (tile_width / 2), ty * tile_width + (tile_width / 2)]; }
+	function bridge_tile_key(tx, ty) { return tx + "," + ty; }
+
+	function bridge_add_building_labels(scene) {
+		if (!bridge_mode || !bridge_show_building_labels) return;
+		for (let i = 0; i < bridge_building_labels.length; i++) {
+			let b = bridge_building_labels[i];
+			let wx = (b.tx * tile_width) + (tile_width / 2);
+			let wy = (b.ty * tile_width) + (tile_width / 2) - 20;
+			scene.add.text(wx, wy, b.id + " " + b.name, {
+				font: "bold 12px monospace",
+				fill: "#0b1220",
+				backgroundColor: "rgba(255,255,255,0.90)",
+				stroke: "#ffffff",
+				strokeThickness: 1,
+				padding: { x: 6, y: 3 }
+			}).setDepth(900).setOrigin(0.5, 0.5);
+		}
+	}
+
+	function bridge_find_nearest_walkable(tx, ty, maxRadius) {
+		if (!bridge_tile_blocked(tx * tile_width + 1, ty * tile_width + 1)) return [tx, ty];
+		for (let r = 1; r <= maxRadius; r++) {
+			for (let dx = -r; dx <= r; dx++) {
+				for (let dy = -r; dy <= r; dy++) {
+					if (Math.abs(dx) !== r && Math.abs(dy) !== r) continue;
+					let nx = tx + dx;
+					let ny = ty + dy;
+					if (nx < 0 || ny < 0 || nx >= bridge_map_width_tiles || ny >= bridge_map_height_tiles) continue;
+					if (!bridge_tile_blocked(nx * tile_width + 1, ny * tile_width + 1)) return [nx, ny];
+				}
+			}
+		}
+		return [tx, ty];
+	}
+
+	function bridge_astar_path(startX, startY, goalX, goalY) {
+		let start = bridge_find_nearest_walkable(startX, startY, 2);
+		let goal = bridge_find_nearest_walkable(goalX, goalY, 8);
+		let startKey = bridge_tile_key(start[0], start[1]);
+		let goalKey = bridge_tile_key(goal[0], goal[1]);
+		if (startKey === goalKey) return [];
+		let open = [start], cameFrom = {}, gScore = {}, fScore = {};
+		gScore[startKey] = 0;
+		fScore[startKey] = Math.abs(start[0] - goal[0]) + Math.abs(start[1] - goal[1]);
+		let visited = 0, maxNodes = 5000;
+		while (open.length > 0 && visited < maxNodes) {
+			visited += 1;
+			let bestIdx = 0, bestKey = bridge_tile_key(open[0][0], open[0][1]);
+			let bestF = fScore[bestKey] ?? Number.POSITIVE_INFINITY;
+			for (let i = 1; i < open.length; i++) {
+				let k = bridge_tile_key(open[i][0], open[i][1]);
+				let f = fScore[k] ?? Number.POSITIVE_INFINITY;
+				if (f < bestF) { bestF = f; bestIdx = i; bestKey = k; }
+			}
+			let current = open.splice(bestIdx, 1)[0];
+			let cx = current[0], cy = current[1], cKey = bridge_tile_key(cx, cy);
+			if (cKey === goalKey) {
+				let path = [], walk = cKey;
+				while (walk && walk !== startKey) {
+					let p = walk.split(",");
+					path.unshift([parseInt(p[0]), parseInt(p[1])]);
+					walk = cameFrom[walk];
+				}
+				return path;
+			}
+			let neighbors = [[cx + 1, cy], [cx - 1, cy], [cx, cy + 1], [cx, cy - 1]];
+			for (let i = 0; i < neighbors.length; i++) {
+				let nx = neighbors[i][0], ny = neighbors[i][1];
+				if (nx < 0 || ny < 0 || nx >= bridge_map_width_tiles || ny >= bridge_map_height_tiles) continue;
+				if (bridge_tile_blocked(nx * tile_width + 1, ny * tile_width + 1)) continue;
+				let nKey = bridge_tile_key(nx, ny);
+				let tentative = (gScore[cKey] ?? Number.POSITIVE_INFINITY) + 1;
+				if (tentative < (gScore[nKey] ?? Number.POSITIVE_INFINITY)) {
+					cameFrom[nKey] = cKey;
+					gScore[nKey] = tentative;
+					fScore[nKey] = tentative + Math.abs(nx - goal[0]) + Math.abs(ny - goal[1]);
+					let inOpen = false;
+					for (let j = 0; j < open.length; j++) if (open[j][0] === nx && open[j][1] === ny) { inOpen = true; break; }
+					if (!inOpen) open.push([nx, ny]);
+				}
+			}
+		}
+		return [];
+	}
+
+	function bridge_recompute_path(personaName, fromX, fromY, goalX, goalY) {
+		let now = performance.now();
+		let last = bridge_last_path_update_ms[personaName] || 0;
+		if ((now - last) < bridge_repath_interval_ms && bridge_paths[personaName] && bridge_paths[personaName].length > 0) return;
+		let fromTile = bridge_world_to_tile(fromX, fromY);
+		let goalTile = bridge_world_to_tile(goalX, goalY);
+		let tilePath = bridge_astar_path(fromTile[0], fromTile[1], goalTile[0], goalTile[1]);
+		let worldPath = [];
+		for (let i = 0; i < tilePath.length; i++) worldPath.push(bridge_tile_to_world(tilePath[i][0], tilePath[i][1]));
+		bridge_paths[personaName] = worldPath;
+		bridge_last_path_update_ms[personaName] = now;
+	}
+
+	// Joon: Phaser 3.0 is oriented around "scenes" -- recall how Pokemon plays: 
+	//       there is the outdoor space, and then there is the indoor space; when
+	//       you go inside, you transition to a new "scene" and the outdoor space
+	//       basically disappears. 
+	//       A scene in Phaser has four key methods that are called at different
+	//       stages of rendering for different purposes. They are: 
+	//       init() -> preload() -> create() -> update()
+	//         init() is called only once at the very beginning. This is the 
+	//           initialization function in case that is needed. 
+	//         preload() is called once and preloads any of the assets
+	//         create() is also called once after preloading... creates sprites 
+	//           and actually displays stuff
+	//         update() is called on each frame during the game play 
+
+	function preload() {  
+	  // Loading the necessary images (e.g., the background image, character 
+	  // sprites). 
+
+	  // Joon: for load.image, the first parameter is simply the key value that
+	  //       you are passing in. The second parameter should be pointed to the
+	  //       png file that contains the tileset. 
+	  //       Also IMPORTANT: when you create a tileset in Tiled, always be  
+	  //       sure to check the "embedded" option. 
+	  this.load.image("blocks_1", "{% static 'assets/the_ville/visuals/map_assets/blocks/blocks_1.png' %}");
+	  this.load.image("walls", "{% static 'assets/the_ville/visuals/map_assets/v1/Room_Builder_32x32.png' %}");
+	  this.load.image("interiors_pt1", "{% static 'assets/the_ville/visuals/map_assets/v1/interiors_pt1.png' %}");
+	  this.load.image("interiors_pt2", "{% static 'assets/the_ville/visuals/map_assets/v1/interiors_pt2.png' %}");
+	  this.load.image("interiors_pt3", "{% static 'assets/the_ville/visuals/map_assets/v1/interiors_pt3.png' %}");
+	  this.load.image("interiors_pt4", "{% static 'assets/the_ville/visuals/map_assets/v1/interiors_pt4.png' %}");
+	  this.load.image("interiors_pt5", "{% static 'assets/the_ville/visuals/map_assets/v1/interiors_pt5.png' %}");
+	  this.load.image("CuteRPG_Field_B", "{% static 'assets/the_ville/visuals/map_assets/cute_rpg_word_VXAce/tilesets/CuteRPG_Field_B.png' %}");
+	  this.load.image("CuteRPG_Field_C", "{% static 'assets/the_ville/visuals/map_assets/cute_rpg_word_VXAce/tilesets/CuteRPG_Field_C.png' %}");
+	  this.load.image("CuteRPG_Harbor_C", "{% static 'assets/the_ville/visuals/map_assets/cute_rpg_word_VXAce/tilesets/CuteRPG_Harbor_C.png' %}");
+	  this.load.image("CuteRPG_Village_B", "{% static 'assets/the_ville/visuals/map_assets/cute_rpg_word_VXAce/tilesets/CuteRPG_Village_B.png' %}");
+	  this.load.image("CuteRPG_Forest_B", "{% static 'assets/the_ville/visuals/map_assets/cute_rpg_word_VXAce/tilesets/CuteRPG_Forest_B.png' %}");
+	  this.load.image("CuteRPG_Desert_C", "{% static 'assets/the_ville/visuals/map_assets/cute_rpg_word_VXAce/tilesets/CuteRPG_Desert_C.png' %}");
+	  this.load.image("CuteRPG_Mountains_B", "{% static 'assets/the_ville/visuals/map_assets/cute_rpg_word_VXAce/tilesets/CuteRPG_Mountains_B.png' %}");
+	  this.load.image("CuteRPG_Desert_B", "{% static 'assets/the_ville/visuals/map_assets/cute_rpg_word_VXAce/tilesets/CuteRPG_Desert_B.png' %}");
+	  this.load.image("CuteRPG_Forest_C", "{% static 'assets/the_ville/visuals/map_assets/cute_rpg_word_VXAce/tilesets/CuteRPG_Forest_C.png' %}");
+
+	  // Joon: This is the export json file you get from Tiled. 
+	  this.load.tilemapTiledJSON("map", "{% static 'assets/the_ville/visuals/the_ville_jan7.json' %}");
+
+	  // An atlas is a way to pack multiple images together into one texture. I'm 
+	  // using it to load all the player animations (walking left, walking right, 
+	  // etc.) in one image. For more info see:
+	  // https://labs.phaser.io/view.html?src=src/animation/texture%20atlas%20animation.js
+	  // If you don't use an atlas, you can do the same thing with a spritesheet, 
+	  // see: https://labs.phaser.io/view.html?src=src/animation/single%20sprite%20sheet.js
+	  // Joon: Technically, I think this guy had the best tutorial for atlas: 
+	  //       https://www.youtube.com/watch?v=fdXcD9X4NrQ&ab_channel=MorganPage
+	  this.load.atlas("atlas", 
+	                  "https://mikewesthad.github.io/phaser-3-tilemap-blog-posts/post-1/assets/atlas/atlas.png", 
+	                  "https://mikewesthad.github.io/phaser-3-tilemap-blog-posts/post-1/assets/atlas/atlas.json");
+	}
+
+	function create() {  
+	  const map = this.make.tilemap({ key: "map" });
+	  bridge_map_width_tiles = map.width;
+	  bridge_map_height_tiles = map.height;
+	  // Joon: Logging map is really helpful for debugging here: 
+	  //       console.log(map);
+
+	  // The first parameter is the name you gave to the tileset in Tiled and then
+	  // the key of the tileset image in Phaser's cache (i.e. the name you used in
+	  // preload)
+	  // Joon: for the first parameter here, really take a look at the 
+	  //       console.log(map) output. You need to make sure that the name 
+	  //       matches.
+	  const collisions = map.addTilesetImage("blocks", "blocks_1");
+	  const walls = map.addTilesetImage("Room_Builder_32x32", "walls");
+	  const interiors_pt1 = map.addTilesetImage("interiors_pt1", "interiors_pt1");
+	  const interiors_pt2 = map.addTilesetImage("interiors_pt2", "interiors_pt2");
+	  const interiors_pt3 = map.addTilesetImage("interiors_pt3", "interiors_pt3");
+	  const interiors_pt4 = map.addTilesetImage("interiors_pt4", "interiors_pt4");
+	  const interiors_pt5 = map.addTilesetImage("interiors_pt5", "interiors_pt5");
+	  const CuteRPG_Field_B = map.addTilesetImage("CuteRPG_Field_B", "CuteRPG_Field_B");
+	  const CuteRPG_Field_C = map.addTilesetImage("CuteRPG_Field_C", "CuteRPG_Field_C");
+	  const CuteRPG_Harbor_C = map.addTilesetImage("CuteRPG_Harbor_C", "CuteRPG_Harbor_C");
+	  const CuteRPG_Village_B = map.addTilesetImage("CuteRPG_Village_B", "CuteRPG_Village_B");
+	  const CuteRPG_Forest_B = map.addTilesetImage("CuteRPG_Forest_B", "CuteRPG_Forest_B");
+	  const CuteRPG_Desert_C = map.addTilesetImage("CuteRPG_Desert_C", "CuteRPG_Desert_C");
+	  const CuteRPG_Mountains_B = map.addTilesetImage("CuteRPG_Mountains_B", "CuteRPG_Mountains_B");
+	  const CuteRPG_Desert_B = map.addTilesetImage("CuteRPG_Desert_B", "CuteRPG_Desert_B");
+	  const CuteRPG_Forest_C = map.addTilesetImage("CuteRPG_Forest_C", "CuteRPG_Forest_C");
+
+	  // The first parameter is the layer name (or index) taken from Tiled, the 
+	  // second parameter is the tileset you set above, and the final two 
+	  // parameters are the x, y coordinate. 
+	  // Joon: The "layer name" that comes as the first parameter value  
+	  //       literally is taken from our Tiled layer name. So to find out what
+	  //       they are; you actually need to open up tiled and see how you 
+	  //       named things there. 
+	  let tileset_group_1 = [CuteRPG_Field_B, CuteRPG_Field_C, CuteRPG_Harbor_C, CuteRPG_Village_B, 
+	  											 CuteRPG_Forest_B, CuteRPG_Desert_C, CuteRPG_Mountains_B, CuteRPG_Desert_B, CuteRPG_Forest_C,
+	  											 interiors_pt1, interiors_pt2, interiors_pt3, interiors_pt4, interiors_pt5, walls];
+	  const bottomGroundLayer = map.createLayer("Bottom Ground", tileset_group_1, 0, 0);
+	  const exteriorGroundLayer = map.createLayer("Exterior Ground", tileset_group_1, 0, 0);
+	  const exteriorDecorationL1Layer = map.createLayer("Exterior Decoration L1", tileset_group_1, 0, 0);
+	  const exteriorDecorationL2Layer = map.createLayer("Exterior Decoration L2", tileset_group_1, 0, 0);
+	  const interiorGroundLayer = map.createLayer("Interior Ground", tileset_group_1, 0, 0);
+	  const wallLayer = map.createLayer("Wall", [CuteRPG_Field_C, walls], 0, 0);
+	  const interiorFurnitureL1Layer = map.createLayer("Interior Furniture L1", tileset_group_1, 0, 0);
+	  const interiorFurnitureL2Layer = map.createLayer("Interior Furniture L2 ", tileset_group_1, 0, 0);
+	  const foregroundL1Layer = map.createLayer("Foreground L1", tileset_group_1, 0, 0);
+	  const foregroundL2Layer = map.createLayer("Foreground L2", tileset_group_1, 0, 0);
+	  foregroundL1Layer.setDepth(2);
+	  foregroundL2Layer.setDepth(2);
+
+	  const collisionsLayer = map.createLayer("Collisions", collisions, 0, 0);
+	  bridge_collision_layer = collisionsLayer;
+	  bridge_wall_layer = wallLayer;
+	  bridge_interior_ground_layer = interiorGroundLayer;
+	  bridge_exterior_ground_layer = exteriorGroundLayer;
+	  // Structural blocking only (stable baseline).
+	  // Door exception logic on wall layer keeps entrances traversable.
+	  bridge_block_layers = [
+	  	collisionsLayer,
+	  	wallLayer
+	  ];
+	  // const groundLayer = map.createLayer("Ground", walls, 0, 0);
+	  // const indoorGroundLayer = map.createLayer("Indoor Ground", walls, 0, 0);
+	  // const wallsLayer = map.createLayer("Walls", walls, 0, 0);
+	  // const interiorsLayer = map.createLayer("Furnitures", interiors, 0, 0);
+	  // const builtInLayer = map.createLayer("Built-ins", interiors, 0, 0);
+	  // const appliancesLayer = map.createLayer("Appliances", interiors, 0, 0);
+	  // const foregroundLayer = map.createLayer("Foreground", interiors, 0, 0);
+
+	  // Joon : This is where you want to create a custom field for the tileset
+	  //        in Tiled. Take a look at this guy's tutorial: 
+	  //        https://www.youtube.com/watch?v=MR2CvWxOEsw&ab_channel=MattWilber
+	  collisionsLayer.setCollisionByProperty({ collide: true });
+	  // By default, everything gets depth sorted on the screen in the order we 
+	  // created things. Here, we want the "Above Player" layer to sit on top of 
+	  // the player, so we explicitly give it a depth. Higher depths will sit on 
+	  // top of lower depth objects.
+	  // Collisions layer should get a negative depth since we do not want to see
+	  // it. 
+	  collisionsLayer.setDepth(-1);
+	  // foregroundL1Layer.setDepth(2);
+	  // foregroundL1Layer.setDepth(2);
+
+	  // *** SET UP CAMERA *** 
+	  // "player" is to be set as the center of mass for our "camera." We 
+	  // basically create a game character sprite as we would for our personas 
+	  // but we move it to depth -1 and let it pass through the collision map;  
+	  // that is, do not have the following line: 
+	  // this.physics.add.collider(player, collisionsLayer);
+	  // OLD NOTE: Create a sprite with physics enabled via the physics system. 
+	  // The image  used for the sprite has a bit of whitespace, so I'm using 
+	  // setSize & setOffset to control the size of the player's body.
+	  player = this.physics.add.
+	                sprite(800, 288, "atlas", "misa-front").
+	                setSize(30, 40).
+	                setOffset(0, 0);
+	  player.setDepth(-1);
+	  // Setting up the camera. 
+	  const camera = this.cameras.main;
+	  camera.startFollow(player);
+	  camera.setBounds(0, 0, map.widthInPixels, map.heightInPixels);
+	  cursors = this.input.keyboard.createCursorKeys();
+
+	  // *** SET UP PERSONAS *** 
+	  // We start by creating the game sprite objects. 
+	  for (let i=0; i<Object.keys(spawn_tile_loc).length; i++) { 
+	    let persona_name = Object.keys(spawn_tile_loc)[i];
+	    let start_pos;
+	    if (bridge_mode) {
+	    	start_pos = [spawn_tile_loc[persona_name][0], spawn_tile_loc[persona_name][1]];
+	    } else {
+	    	start_pos = [spawn_tile_loc[persona_name][0] * tile_width + tile_width / 2, 
+	                   spawn_tile_loc[persona_name][1] * tile_width + tile_width];
+	    }
+	    let new_sprite = this.physics.add
+	                         .sprite(start_pos[0], start_pos[1], "atlas", "misa-front")
+	                         .setSize(30, 40)
+	                         .setOffset(0, 32); // DEBUG 1 --- I added 32 offset on Dec 29. 
+	    // Here, we are creating the persona and its pronunciatio sprites.
+	    personas[persona_name] = new_sprite;
+	    bridge_target[persona_name] = [new_sprite.x, new_sprite.y];
+	    bridge_destination[persona_name] = [new_sprite.x, new_sprite.y];
+	    bridge_velocity[persona_name] = [0.0, 0.0];
+	    bridge_last_update_ms[persona_name] = performance.now();
+	    pronunciatios[persona_name] = this.add.text(
+	                                   new_sprite.x - 6, 
+	                                   new_sprite.y - 42 - 32, // DEBUG 1 --- I added 32 offset on Dec 29. 
+	                                   "🦁", {
+	                                   font: "28px monospace", 
+	                                   fill: "#000000", 
+	                                   padding: { x: 8, y: 8}, 
+	                                   backgroundColor: "#ffffff",
+	                                   border:"solid",
+	                                   borderRadius:"10px"}).setDepth(3);
+	    role_titles[persona_name] = this.add.text(
+	                                  new_sprite.x,
+	                                  new_sprite.y - 78 - 32,
+	                                  roleTitleFromName(persona_name),
+	                                  {
+	                                   font: "bold 11px monospace",
+	                                   fill: "#ffffff",
+	                                   padding: { x: 4, y: 2 },
+	                                   backgroundColor: "rgba(10,22,45,0.85)",
+	                                  }).setDepth(4).setOrigin(0.5, 0.5);
+	  }
+
+	  // Create the player's walking animations from the texture atlas. These are
+	  // stored in the global animation manager so any sprite can access them.
+	  const anims = this.anims;
+	  anims.create({
+	    key: "misa-left-walk",
+	    frames: anims.generateFrameNames("atlas", { prefix: "misa-left-walk.", start: 0, end: 3, zeroPad: 3 }),
+	    frameRate: 4,
+	    repeat: -1 });
+
+	  anims.create({
+	    key: "misa-right-walk",
+	    frames: anims.generateFrameNames("atlas", { prefix: "misa-right-walk.", start: 0, end: 3, zeroPad: 3 }),
+	    frameRate: 4,
+	    repeat: -1 });
+
+	  anims.create({
+	    key: "misa-front-walk",
+	    frames: anims.generateFrameNames("atlas", { prefix: "misa-front-walk.", start: 0, end: 3, zeroPad: 3 }),
+	    frameRate: 4,
+	    repeat: -1 });
+
+	  anims.create({
+	    key: "misa-back-walk",
+	    frames: anims.generateFrameNames("atlas", { prefix: "misa-back-walk.", start: 0, end: 3, zeroPad: 3 }),
+	    frameRate: 4,
+	    repeat: -1 });
+
+	  // Keep labels strictly non-blocking so movement cannot regress.
+	  try { bridge_add_building_labels(this); } catch (e) { console.warn("building-label overlay failed", e); }
+	}
+
+
+	function update(time, delta) {
+		// *** SETUP PLAY AND PAUSE BUTTON *** 
+		let play_context = this;
+		function game_resume() {  
+			play_context.scene.resume();
+		}  
+		play_button.onclick = function(){
+			game_resume();
+		};
+		function game_pause() {  
+			play_context.scene.pause();
+		}  
+		pause_button.onclick = function(){
+			game_pause();
+		};
+
+	  // *** MOVE CAMERA *** 
+	  // This is where we finish up the camera setting we started in the create() 
+	  // function. We set the movement speed of the camera and wire up the keys to
+	  // map to the actual movement.
+	  const camera_speed = 400;
+	  // Stop any previous movement from the last frame
+	  player.body.setVelocity(0);
+	  if (cursors.left.isDown) {
+	    player.body.setVelocityX(-camera_speed);
+	  } 
+	  if (cursors.right.isDown) {
+	    player.body.setVelocityX(camera_speed);
+	  } 
+	  if (cursors.up.isDown) {
+	    player.body.setVelocityY(-camera_speed);
+	  } 
+	  if (cursors.down.isDown) {
+	    player.body.setVelocityY(camera_speed);
+	  }
+
+	  if (bridge_mode) {
+	  	if (timer <= 0) {
+	      var bridge_xobj = new XMLHttpRequest();
+	      bridge_xobj.overrideMimeType("application/json");
+	      bridge_xobj.open('POST', "{% url 'update_environment' %}", true);
+	      bridge_xobj.addEventListener("load", function() {
+	        if (this.readyState === 4 && bridge_xobj.status === 200) {
+	          let payload = JSON.parse(bridge_xobj.responseText);
+	          if (payload["meta"] && payload["meta"]["curr_time"]) {
+	          	document.getElementById("game-time-content").innerHTML = payload["meta"]["curr_time"];
+	          }
+	          if (payload["persona"]) {
+	          	for (let i=0; i<Object.keys(personas).length; i++) {
+	          		let curr_persona_name = Object.keys(personas)[i];
+	          		let curr_persona_name_os = curr_persona_name.replace(/ /g,"_");
+	          		let p = payload["persona"][curr_persona_name];
+	          		if (!p) continue;
+	          		let tx = p["movement"][0], ty = p["movement"][1];
+	          		let dzx = (p["dest_x"] !== undefined) ? p["dest_x"] : tx;
+	          		let dzy = (p["dest_y"] !== undefined) ? p["dest_y"] : ty;
+	          		let nowMs = performance.now();
+	          		let prevTarget = bridge_target[curr_persona_name] || [tx, ty];
+	          		let lastMs = bridge_last_update_ms[curr_persona_name] || (nowMs - 100.0);
+	          		let dtMs = Math.max(16.0, nowMs - lastMs);
+	          		bridge_velocity[curr_persona_name] = [(tx - prevTarget[0]) / dtMs, (ty - prevTarget[1]) / dtMs];
+	          		bridge_last_update_ms[curr_persona_name] = nowMs;
+	          		bridge_target[curr_persona_name] = [
+	          			(prevTarget[0] + (tx - prevTarget[0]) * bridge_target_blend),
+	          			(prevTarget[1] + (ty - prevTarget[1]) * bridge_target_blend)
+	          		];
+	          		bridge_destination[curr_persona_name] = [dzx, dzy];
+	          		let role_content = roleTitleFromPayloadRole(p["role"] || "");
+	          		pronunciatios[curr_persona_name].setText(role_content || roleTitleFromName(curr_persona_name));
+	          		if (role_titles[curr_persona_name]) {
+	          			role_titles[curr_persona_name].setText(role_content);
+	          		}
+	          		let description_content = p["description"] || "idle@home";
+	          		let split_desc = description_content.split("@");
+	          		document.getElementById("current_action__"+curr_persona_name_os).innerHTML = split_desc[0] || "idle";
+	          		document.getElementById("target_address__"+curr_persona_name_os).innerHTML = split_desc[1] || "home";
+	          		document.getElementById("chat__"+curr_persona_name_os).innerHTML = "<em>None at the moment</em>";
+	          	}
+	          }
+	          timer = timer_max;
+	        }
+	      });
+	      bridge_xobj.send(JSON.stringify({"step": step, "sim_code": sim_code }));
+	    }
+
+	    for (let i=0; i<Object.keys(personas).length; i++) {
+	    	let name = Object.keys(personas)[i];
+	    	let sprite = personas[name];
+	    	let bubble = pronunciatios[name];
+	    	let title = role_titles[name];
+	    	let tgt = bridge_target[name] || [sprite.x, sprite.y];
+	    	let vel = bridge_velocity[name] || [0.0, 0.0];
+	    	let dest = bridge_destination[name] || tgt;
+	    	let nowMs = performance.now();
+	    	let ageMs = Math.max(0.0, nowMs - (bridge_last_update_ms[name] || nowMs));
+	    	let predictMs = Math.min(ageMs, bridge_predict_ms);
+	    	let predictedX = tgt[0] + vel[0] * predictMs;
+	    	let predictedY = tgt[1] + vel[1] * predictMs;
+	    	if (ageMs > bridge_stale_ms) {
+	    		predictedX = predictedX + (dest[0] - predictedX) * 0.38;
+	    		predictedY = predictedY + (dest[1] - predictedY) * 0.38;
+	    	}
+
+	    	bridge_recompute_path(name, sprite.x, sprite.y, dest[0], dest[1]);
+	    	let path = bridge_paths[name] || [];
+	    	let navTargetX = predictedX, navTargetY = predictedY;
+	    	if (path.length > 0) {
+	    		let wp = path[0];
+	    		let wdx = wp[0] - sprite.x, wdy = wp[1] - sprite.y;
+	    		if (Math.abs(wdx) <= 8 && Math.abs(wdy) <= 8) {
+	    			path.shift();
+	    			bridge_paths[name] = path;
+	    			if (path.length > 0) wp = path[0];
+	    		}
+	    		if (path.length > 0) { navTargetX = wp[0]; navTargetY = wp[1]; }
+	    	}
+
+	    	let dx = navTargetX - sprite.x, dy = navTargetY - sprite.y;
+	    	if (Math.abs(dx) > bridge_arrival_epsilon || Math.abs(dy) > bridge_arrival_epsilon) {
+	    		let dist = Math.sqrt((dx * dx) + (dy * dy));
+	    		let desiredStep = Math.min(bridge_steady_step, dist);
+	    		let stepX = 0.0, stepY = 0.0;
+	    		if (dist > 0.0001) { stepX = (dx / dist) * desiredStep; stepY = (dy / dist) * desiredStep; }
+	    		stepX = Math.max(-bridge_max_step, Math.min(bridge_max_step, stepX));
+	    		stepY = Math.max(-bridge_max_step, Math.min(bridge_max_step, stepY));
+	    		let nx = sprite.x + stepX, ny = sprite.y + stepY;
+	    		let moved = false;
+	    		if (bridge_can_occupy(nx, ny)) { sprite.setPosition(nx, ny); moved = true; }
+	    		else if (bridge_can_occupy(nx, sprite.y)) { sprite.setPosition(nx, sprite.y); moved = true; }
+	    		else if (bridge_can_occupy(sprite.x, ny)) { sprite.setPosition(sprite.x, ny); moved = true; }
+	    		if (!moved) anims_direction = "";
+	    		else if (Math.abs(dx) >= Math.abs(dy)) anims_direction = (dx > 0) ? "r" : "l";
+	    		else anims_direction = (dy > 0) ? "d" : "u";
+	    		pre_anims_direction_dict[name] = anims_direction;
+	    		if (anims_direction == "l") sprite.anims.play("misa-left-walk", true);
+	    		else if (anims_direction == "r") sprite.anims.play("misa-right-walk", true);
+	    		else if (anims_direction == "u") sprite.anims.play("misa-back-walk", true);
+	    		else if (anims_direction == "d") sprite.anims.play("misa-front-walk", true);
+	    	} else {
+	    		sprite.anims.stop();
+	    		if (pre_anims_direction_dict[name] == "l") sprite.setTexture("atlas", "misa-left");else
+			    if (pre_anims_direction_dict[name] == "r") sprite.setTexture("atlas", "misa-right");else
+			    if (pre_anims_direction_dict[name] == "u") sprite.setTexture("atlas", "misa-back");else
+			    if (pre_anims_direction_dict[name] == "d") sprite.setTexture("atlas", "misa-front");
+	    	}
+	    	bubble.x = sprite.x - 6;
+	    	bubble.y = sprite.y - 42 - 32;
+	    	if (title) {
+	    		title.x = sprite.x;
+	    		title.y = sprite.y - 78 - 32;
+	    	}
+	    }
+
+	    timer = timer - 1;
+	    return;
+	  }
+
+	  // console.log("phase: " + phase + ", step: " + step);
+	  // *** MOVE PERSONAS ***
+	  // Moving personas take place in three distinct phases: "process," "update,"
+	  // and "execute." These phases are determined by the value of <phase>. 
+	  // Only one of the three phases is incurred in each update cycle. 
+	  if (phase == "process") {
+	    // "process" takes all current locations of the personas and send them to
+	    // the frontend server in a json form. Here, we first create the json 
+	    // file that records all persona locations: 
+	    let data = {"step": step, 
+	    						"sim_code": sim_code,
+	                "environment": {}}
+	    for (let i=0; i<Object.keys(personas).length; i++) {
+	      let persona_name = Object.keys(personas)[i];
+	      data["environment"][persona_name] = {"maze": curr_maze,
+	                                           "x": Math.ceil((personas[persona_name].body.position.x) / tile_width),
+	                                           "y": Math.ceil((personas[persona_name].body.position.y) / tile_width)}
+	    }
+	    var json = JSON.stringify(data);
+	    // We then send this to the frontend server: 
+	    var retrieve_xobj = new XMLHttpRequest();
+	    retrieve_xobj.overrideMimeType("application/json");
+	    retrieve_xobj.open('POST', "{% url 'process_environment' %}", true);
+	    retrieve_xobj.send(json);   
+	    // Finally, we update the phase variable to start the "udpate" process. 
+	    // Now that we sent all persona locations to the backend server, we need
+	    // to wait until the backend determines what the personas will do next. 
+	    phase = "update";
+	  } 
+
+	  else if (phase == "update") { 
+	    // Update is where we * wait * for the backend server to finish 
+	    // computing about what the personas will do next given their current 
+	    // situation. 
+	    // We do this by continuously asking the backend server if it is ready. 
+	    // The backend server is ready when it returns a json that has a key-val
+	    // pair with "<move>": true.
+	    // Note that we do not want to overburden the backend too much by 
+	    // over-querying; so, we have a timer set so we only query it once every
+	    // timer_max cycles. 
+	    if (timer <= 0) {
+	      var update_xobj = new XMLHttpRequest();
+	      update_xobj.overrideMimeType("application/json");
+	      update_xobj.open('POST', "{% url 'update_environment' %}", true);
+	      update_xobj.addEventListener("load", function() {
+	        if (this.readyState === 4) {
+	          if (update_xobj.status === 200) {
+	            if (JSON.parse(update_xobj.responseText)["<step>"] == step) {
+	              execute_movement = JSON.parse(update_xobj.responseText)
+	              phase = "execute";
+	            }
+	            timer = timer_max;
+	          }
+	        }
+	      });
+	      update_xobj.send(JSON.stringify({"step": step, "sim_code": sim_code }));   
+	    }
+	    timer = timer - 1; 
+	  } 
+
+	  else { 
+	    // This is where we actually move the personas in the visual world. Each
+	    // backend computation in execute_movement moves each persona by one tile
+	    // (or some personas might not move if they choose not to). 
+	    // The execute_count_max is computed by tile_width/movement_speed, which
+	    // defines a one step sequence in this world. 
+	    document.getElementById("game-time-content").innerHTML = execute_movement["meta"]["curr_time"];
+	    for (let i=0; i<Object.keys(personas).length; i++) {
+	      let curr_persona_name = Object.keys(personas)[i];
+	      let curr_persona = personas[curr_persona_name];
+	      let curr_pronunciatio = pronunciatios[Object.keys(personas)[i]];
+	      let curr_role_title = role_titles[Object.keys(personas)[i]];
+
+	      if (execute_count == execute_count_max) { 
+	        let curr_x = execute_movement["persona"][curr_persona_name]["movement"][0];
+	        let curr_y = execute_movement["persona"][curr_persona_name]["movement"][1];
+	        movement_target[curr_persona_name] = [curr_x * tile_width, 
+	                                              curr_y * tile_width]; 
+	        pronunciatios[curr_persona_name].setText(roleTitleFromName(curr_persona_name));
+	        if (curr_role_title) curr_role_title.setText(roleTitleFromName(curr_persona_name));
+	      }
+
+	      console.log(curr_persona_name);
+	      if (execute_count > 0) {
+	        if (curr_persona.body.x < movement_target[curr_persona_name][0]) {
+	          curr_persona.body.x += movement_speed; 
+	          anims_direction = "r";
+	          pre_anims_direction = "r"
+	          pre_anims_direction_dict[curr_persona_name] = "r"
+	        } else if (curr_persona.body.x > movement_target[curr_persona_name][0]) {
+	          curr_persona.body.x -= movement_speed; 
+	          anims_direction = "l";
+	          pre_anims_direction = "l"
+	          pre_anims_direction_dict[curr_persona_name] = "l"
+	        } else if (curr_persona.body.y < movement_target[curr_persona_name][1]) {
+	          curr_persona.body.y += movement_speed;
+	          anims_direction = "d";
+	          pre_anims_direction = "d"
+	          pre_anims_direction_dict[curr_persona_name] = "d"
+	        } else if (curr_persona.body.y > movement_target[curr_persona_name][1]) {
+	          curr_persona.body.y -= movement_speed;
+	          anims_direction = "u";
+	          pre_anims_direction = "u"
+	          pre_anims_direction_dict[curr_persona_name] = "u"
+	        } else {
+	        	anims_direction = "";
+	        }
+
+	        curr_pronunciatio.x = curr_persona.body.x - 6; 
+          curr_pronunciatio.y = curr_persona.body.y - 42 - 32; // DEBUG 1 --- I added 32 offset on Dec 29. 
+          if (curr_role_title) {
+          	curr_role_title.x = curr_persona.body.x;
+          	curr_role_title.y = curr_persona.body.y - 78 - 32;
+          }
+
+          if (anims_direction == "l") {
+			      curr_persona.anims.play("misa-left-walk", true);
+			    } else if (anims_direction == "r") {
+			      curr_persona.anims.play("misa-right-walk", true);
+			    } else if (anims_direction == "u") {
+			      curr_persona.anims.play("misa-back-walk", true);
+			    } else if (anims_direction == "d") {
+			      curr_persona.anims.play("misa-front-walk", true);
+			    } else {
+			      curr_persona.anims.stop();
+
+			      // If we were moving, pick an idle frame to use
+			      if (pre_anims_direction_dict[curr_persona_name] == "l") curr_persona.setTexture("atlas", "misa-left");else
+			      if (pre_anims_direction_dict[curr_persona_name] == "r") curr_persona.setTexture("atlas", "misa-right");else
+			      if (pre_anims_direction_dict[curr_persona_name] == "u") curr_persona.setTexture("atlas", "misa-back");else
+			      if (pre_anims_direction_dict[curr_persona_name] == "d") curr_persona.setTexture("atlas", "misa-front");
+			    };
+
+	      } 
+	      else {
+	        // Once we are done moving the personas, we move on to the "process"
+	        // stage where we will send the current locations of all personas at the
+	        // end of the movemments to the frontend server, and then the backend.
+	        for (let i=0; i<Object.keys(personas).length; i++) {
+	          let curr_persona_name = Object.keys(personas)[i]
+	          let curr_persona = personas[curr_persona_name];
+	          curr_persona.body.x = movement_target[curr_persona_name][0];
+	          curr_persona.body.y = movement_target[curr_persona_name][1];
+	        }
+	        phase = "process";
+	        execute_count = execute_count_max + 1;
+	        step = step + 1;
+	      }
+	    }
+
+	    // Filling in the action description. 
+	    if (execute_count == execute_count_max) { 
+	      for (let i=0; i<Object.keys(personas).length; i++) {
+	      	let action_description = ""
+	        let curr_persona_name = Object.keys(personas)[i];
+	        let curr_persona_name_os = curr_persona_name.replace(/ /g,"_");
+	        let description_content = execute_movement["persona"][curr_persona_name]["description"];
+	        let chat_content = ""
+
+	        if (execute_movement["persona"][curr_persona_name]["chat"] != null ){
+		        for (let j=0; j<execute_movement["persona"][curr_persona_name]["chat"].length; j++) { 
+		        	chat_content += execute_movement["persona"][curr_persona_name]["chat"][j][0] + ": " + execute_movement["persona"][curr_persona_name]["chat"][j][1] + "<br>"
+		        }
+		      } else {
+		      	chat_content = "<em>None at the moment</em>"
+		      }
+	        // action_description += description_content + "<br>";
+
+	        document.getElementById("current_action__"+curr_persona_name_os).innerHTML = description_content.split("@")[0];
+	        document.getElementById("target_address__"+curr_persona_name_os).innerHTML = description_content.split("@")[1];
+	        document.getElementById("chat__"+curr_persona_name_os).innerHTML = chat_content;
+	      }
+	      
+	    }
+
+	    execute_count = execute_count - 1;
+	  }
+	}
+
+	// Control button binders
+	var play_button=document.getElementById("play_button");
+	var pause_button=document.getElementById("pause_button");
+</script>

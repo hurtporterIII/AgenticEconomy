@@ -77,5 +77,29 @@ if ($moved -lt 1 -and $changedAction -lt 1) {
   throw "No movement/action changes detected in sample window."
 }
 
+Write-Host "Checking role visibility and home anchoring..."
+$roles = @{}
+foreach ($a in $snap2.actors) {
+  $r = [string]$a.role
+  if (-not $roles.ContainsKey($r)) { $roles[$r] = 0 }
+  $roles[$r] += 1
+}
+$hasSpy = $roles.ContainsKey("spy")
+$hasThief = $roles.ContainsKey("thief")
+Write-Host ("- Spy present:         " + ($(if ($hasSpy) {'YES'} else {'NO'})))
+Write-Host ("- Thief present:       " + ($(if ($hasThief) {'YES'} else {'NO'})))
+if (-not $hasSpy) { throw "Spy missing from bridge payload." }
+if (-not $hasThief) { throw "Thief missing from bridge payload." }
+
+$bankerOutOfHome = @()
+foreach ($a in $snap2.actors | Where-Object { $_.role -eq "banker" }) {
+  $dz = [string]$a.dest_zone
+  if ($dz -notmatch "Bank Home") { $bankerOutOfHome += $a.id }
+}
+Write-Host ("- Banker home-anchored: " + ($(if ($bankerOutOfHome.Count -eq 0) {'YES'} else {'NO'})))
+if ($bankerOutOfHome.Count -gt 0) {
+  throw ("Banker not home-anchored: " + ($bankerOutOfHome -join ", "))
+}
+
 Write-Host ""
 Write-Host "Smallville health check PASSED."

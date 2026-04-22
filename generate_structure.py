@@ -1,6 +1,8 @@
 import argparse
 import json
 import os
+from collections import Counter
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -14,29 +16,95 @@ EXCLUDE_DIRS = {
     ".project",
     ".vscode",
 }
+# Large runtime trees: still navigable via parent index.md; skipping avoids 10k+ churning stubs.
+SKIP_INDEX_SUBTREES = {
+    "storage",  # per-simulation runtime under frontend_server/storage
+    "compressed_storage",
+}
 EXCLUDE_FILES = {
     ".DS_Store",
     "Thumbs.db",
 }
 SKIP_META_FOR_EXT = {".log", ".tmp"}
 
+FOLDER_HINTS = {
+    "backend": ("Backend simulation engine and API services.", ["backend", "api", "simulation"]),
+    "frontend": ("Frontend runtime and UI assets.", ["frontend", "ui", "phaser"]),
+    "generative_agents": ("Smallville/Generative Agents integration workspace.", ["smallville", "integration"]),
+    "environment": ("Simulation environment and map runtime files.", ["environment", "map"]),
+    "reverie": ("Original Reverie simulation runtime.", ["reverie", "simulation"]),
+    "persona": ("Persona cognition, memory, and planning modules.", ["persona", "agents", "cognition"]),
+    "cognitive_modules": ("Per-step cognitive pipelines (perceive/plan/act).", ["cognition", "planning"]),
+    "memory_structures": ("Associative / scratch memory structures for personas.", ["memory", "persona"]),
+    "prompt_template": ("LLM prompt templates for persona behaviors.", ["prompts", "llm", "persona"]),
+    "backend_server": ("Reverie Python server (reverie.py) and persona runtime.", ["reverie", "server"]),
+    "frontend_server": ("Django + Phaser environment server for Smallville map.", ["django", "phaser", "smallville"]),
+    "translator": ("Django app: views, URLs, bridge to FastAPI.", ["django", "bridge", "api"]),
+    "core": ("Core loop/state and shared runtime logic.", ["core", "engine"]),
+    "agents": ("Role-specific agent behavior handlers.", ["agents", "behavior"]),
+    "api": ("HTTP API endpoints and bridge interfaces.", ["api", "http"]),
+    "tx": ("Transaction submission/inspection modules.", ["transactions", "arc", "usdc"]),
+    "store": ("Runtime state storage and generated catalogs.", ["state", "storage"]),
+    "templates": ("Frontend HTML templates and scripts.", ["templates", "frontend"]),
+    "wallet_setup": ("Wallet provisioning and key material utilities.", ["wallets", "keys"]),
+    "docs": ("Project documentation and architecture notes.", ["docs"]),
+    "config": ("Configuration constants and pricing rules.", ["config"]),
+}
+
+EXT_HINTS = {
+    ".py": ("Python logic file for runtime behavior.", ["python", "code"]),
+    ".js": ("JavaScript runtime logic.", ["javascript", "code"]),
+    ".ts": ("TypeScript source file.", ["typescript", "code"]),
+    ".tsx": ("TypeScript React component.", ["typescript", "react"]),
+    ".jsx": ("JavaScript React component.", ["javascript", "react"]),
+    ".json": ("Structured data or configuration.", ["json", "data"]),
+    ".md": ("Documentation or notes.", ["docs", "markdown"]),
+    ".yaml": ("YAML configuration file.", ["config", "yaml"]),
+    ".yml": ("YAML configuration file.", ["config", "yaml"]),
+    ".toml": ("TOML configuration file.", ["config", "toml"]),
+    ".ps1": ("PowerShell automation script.", ["powershell", "automation"]),
+    ".sh": ("Shell automation script.", ["shell", "automation"]),
+    ".txt": ("Plain text file.", ["text"]),
+    ".html": ("HTML template or page.", ["html", "frontend"]),
+    ".css": ("Stylesheet file.", ["css", "frontend"]),
+    ".png": ("Image asset.", ["asset", "image"]),
+    ".jpg": ("Image asset.", ["asset", "image"]),
+    ".jpeg": ("Image asset.", ["asset", "image"]),
+    ".svg": ("Vector image asset.", ["asset", "image"]),
+    ".dat": ("Binary data artifact.", ["binary", "data"]),
+    ".docx": ("Word document asset.", ["document"]),
+}
+
 
 def describe_file(name: str) -> str:
     ext = Path(name).suffix.lower()
-    return {
-        ".py": "Python logic file for system behavior.",
-        ".js": "Frontend JavaScript logic.",
-        ".json": "Structured data or configuration.",
-        ".md": "Documentation file.",
-        ".yaml": "Configuration settings.",
-        ".yml": "Configuration settings.",
-        ".ps1": "PowerShell automation script.",
-        ".txt": "Text file.",
-    }.get(ext, "General file.")
+    return EXT_HINTS.get(ext, ("General file artifact.", []))[0]
 
 
 def describe_folder(name: str) -> str:
-    return f"Module for {name}."
+    lowered = name.lower()
+    if lowered in FOLDER_HINTS:
+        return FOLDER_HINTS[lowered][0]
+    return f"Module folder for {name}."
+
+
+def infer_tags(path: Path, is_dir: bool) -> list[str]:
+    tags: set[str] = set()
+    parts = [p.lower() for p in path.parts]
+    for p in parts:
+        if p in FOLDER_HINTS:
+            tags.update(FOLDER_HINTS[p][1])
+        if p in {"smallville", "bridge"}:
+            tags.update({"smallville", "bridge"})
+        if p in {"wallet", "wallets"}:
+            tags.update({"wallets"})
+    if is_dir:
+        tags.add("folder")
+    else:
+        ext = path.suffix.lower()
+        tags.add("file")
+        tags.update(EXT_HINTS.get(ext, ("", []))[1])
+    return sorted(tags)
 
 
 def is_hidden(path: Path) -> bool:
@@ -54,13 +122,47 @@ def should_skip_file(path: Path) -> bool:
     return False
 
 
+def _path_contains_skip_segment(rel: Path) -> bool:
+    parts = set(rel.parts)
+    return bool(parts & SKIP_INDEX_SUBTREES)
+
+
+def is_curated_index(index_path: Path) -> bool:
+    """
+    Hand-written navigation files use YAML frontmatter starting with '---'.
+    Never overwrite those with auto-generated stubs.
+    """
+    try:
+        if not index_path.is_file():
+            return False
+        with index_path.open("r", encoding="utf-8", errors="replace") as handle:
+            first = handle.readline().strip()
+        return first == "---"
+    except OSError:
+        return False
+
+
 def write_meta(path: Path, name: str, is_dir: bool) -> None:
+    stat = path.stat()
+    rel = path.relative_to(ROOT)
+    ext = path.suffix.lower() if not is_dir else ""
     meta = {
         "name": name,
         "type": "folder" if is_dir else "file",
         "description": describe_folder(name) if is_dir else describe_file(name),
-        "path": str(path),
+        "path": str(path.resolve()),
+        "relative_path": str(rel).replace("\\", "/"),
+        "tags": infer_tags(path, is_dir),
+        "modified_utc": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
     }
+    if not is_dir:
+        meta["extension"] = ext
+        meta["size_bytes"] = int(stat.st_size)
+    else:
+        meta["contains"] = {
+            "folders": sum(1 for c in path.iterdir() if c.is_dir() and c.name not in EXCLUDE_DIRS),
+            "files": sum(1 for c in path.iterdir() if c.is_file() and not should_skip_file(c)),
+        }
 
     meta_path = path / ".meta.json" if is_dir else Path(str(path) + ".meta.json")
     meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
@@ -68,8 +170,24 @@ def write_meta(path: Path, name: str, is_dir: bool) -> None:
 
 def write_index(folder_path: Path, dirs: list[str], files: list[str]) -> None:
     index_path = folder_path / "index.md"
+    rel_to_root = folder_path.relative_to(ROOT)
+    if _path_contains_skip_segment(rel_to_root):
+        return
 
-    lines = [f"# {folder_path.name}", ""]
+    if is_curated_index(index_path):
+        return
+
+    rel = "." if folder_path == ROOT else str(folder_path.relative_to(ROOT)).replace("\\", "/")
+    file_entries = [f for f in sorted(files) if f != "index.md"]
+    ext_counts = Counter(Path(f).suffix.lower() or "<none>" for f in file_entries)
+    lines = [f"# {folder_path.name}", "", f"Path: `{rel}`", ""]
+    lines.append("## Summary")
+    lines.append(f"- Subfolders: {len(dirs)}")
+    lines.append(f"- Files: {len(file_entries)}")
+    if ext_counts:
+        top = ", ".join([f"{k}:{v}" for k, v in ext_counts.most_common(8)])
+        lines.append(f"- File types: {top}")
+    lines.append("")
 
     if dirs:
         lines.append("## Folders")
@@ -77,7 +195,6 @@ def write_index(folder_path: Path, dirs: list[str], files: list[str]) -> None:
             lines.append(f"- {d}: {describe_folder(d)}")
         lines.append("")
 
-    file_entries = [f for f in sorted(files) if f != "index.md"]
     if file_entries:
         lines.append("## Files")
         for f in file_entries:
@@ -94,6 +211,7 @@ def run(root: Path, with_meta: bool, include_hidden: bool) -> None:
             d
             for d in dirs
             if d not in EXCLUDE_DIRS
+            and d not in SKIP_INDEX_SUBTREES
             and (include_hidden or not d.startswith("."))
         ]
 
@@ -109,14 +227,23 @@ def run(root: Path, with_meta: bool, include_hidden: bool) -> None:
                 continue
             clean_files.append(file_name)
 
-        if with_meta:
+        rel_folder = current_path.relative_to(ROOT)
+        skip_subtree = _path_contains_skip_segment(rel_folder)
+        curated_index = is_curated_index(current_path / "index.md")
+
+        if with_meta and not skip_subtree and not curated_index:
             write_meta(current_path, current_path.name, True)
 
-        write_index(current_path, dirs, clean_files)
+        if not skip_subtree:
+            write_index(current_path, dirs, clean_files)
 
         if with_meta:
             for file_name in clean_files:
                 file_path = current_path / file_name
+                if file_name == "index.md" and is_curated_index(file_path):
+                    continue
+                if skip_subtree:
+                    continue
                 write_meta(file_path, file_name, False)
 
 

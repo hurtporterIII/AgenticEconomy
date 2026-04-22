@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import random
 import json
+import math
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
@@ -22,8 +23,17 @@ ROLE_TO_SMALLVILLE = {
     "banker": "resident_banker",
     "bank": "landmark_bank",
 }
+ROLE_HUB_DEFAULTS = {
+    "worker_home": "B08",
+    "worker_work": "B11",
+    "thief_home": "B07",
+    "cop_home": "B09",
+    "bank_home": "B12",
+    "spy_home": "B06",
+}
 TILE_SIZE = 32.0
 MAP_SUMMARY_PATH = Path(__file__).resolve().parents[1] / "store" / "map_summary.json"
+BUILDING_CATALOG_PATH = Path(__file__).resolve().parents[1] / "store" / "building_catalog.json"
 _MAP_LAYOUT_CACHE = None
 _SECTOR_CENTERS: dict[str, dict] = {}
 
@@ -48,6 +58,8 @@ WORK_SECTORS = [
     "Hobbs Cafe",
     "Oak Hill College",
 ]
+WORKER_MONEY_SECTORS = ["The Willows Market and Pharmacy"]  # B11
+WORKER_HOME_SECTORS = ["artist's co-living space"]  # B08
 BANK_SECTORS = [
     "The Willows Market and Pharmacy",
     "Harvey Oak Supply Store",
@@ -313,26 +325,168 @@ def _sector_footprint(sector_name: str) -> dict:
     }
 
 
-def _resolve_destination(entity: dict, latest_event: dict | None, entities: dict, tick: int) -> tuple[str, float, float]:
-    role = str(entity.get("type", "resident"))
+def _load_building_catalog() -> dict:
+    if not BUILDING_CATALOG_PATH.exists():
+        return {}
+    try:
+        return json.loads(BUILDING_CATALOG_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _building_anchor_point(building_id: str, anchor: str = "center") -> tuple[float, float] | None:
+    anchor = str(anchor or "center").strip().lower()
+    if anchor not in {"entry", "inside", "center"}:
+        anchor = "center"
+    catalog = _load_building_catalog()
+    for b in catalog.get("buildings", []):
+        if str(b.get("id", "")).upper() != str(building_id).upper():
+            continue
+        if anchor == "inside":
+            ep = b.get("inside_px", b.get("center_px", b.get("entry_px", {})))
+        elif anchor == "center":
+            ep = b.get("center_px", b.get("entry_px", {}))
+        else:
+            ep = b.get("entry_px", {})
+        try:
+            return float(ep.get("x")), float(ep.get("y"))
+        except Exception:
+            return None
+    return None
+
+
+def _stable_offset(seed_key: str, max_abs: int = 16) -> tuple[float, float]:
+    seed = sum(ord(ch) for ch in str(seed_key))
+    ox = ((seed * 7) % (max_abs * 2 + 1)) - max_abs
+    oy = ((seed * 11) % (max_abs * 2 + 1)) - max_abs
+    return float(ox), float(oy)
+
+
+def _spot_target(
+    building_id: str,
+    anchor: str,
+    spot: str,
+    entity_id: str,
+    ordinal: int,
+) -> tuple[float, float] | None:
+    spot_name = str(spot or "").strip().lower()
+    if spot_name in {"", "anchor"}:
+        return _building_anchor_point(building_id, anchor)
+
+    entry = _building_anchor_point(building_id, "entry")
+    inside = _building_anchor_point(building_id, "inside")
+    center = _building_anchor_point(building_id, "center")
+    if not entry and not inside and not center:
+        return None
+
+    if spot_name == "entry":
+        base = entry or inside or center
+        return float(base[0]), float(base[1])
+    if spot_name == "inside":
+        base = inside or center or entry
+        return float(base[0]), float(base[1])
+    if spot_name == "center":
+        base = center or inside or entry
+        return float(base[0]), float(base[1])
+
+    # "meeting" keeps agents close in a small circle.
+    if spot_name == "meeting":
+        base = inside or center or entry
+        radius = 22.0
+        angle = (ordinal % 12) * (2.0 * 3.141592653589793 / 12.0)
+        return float(base[0] + (radius * math.cos(angle))), float(base[1] + (radius * math.sin(angle)))
+
+    # "desks" spreads agents in a wider ring pattern around an interior point.
+    if spot_name == "desks":
+        base = inside or center or entry
+        ring = (ordinal // 12) + 1
+        radius = 28.0 + (ring * 18.0)
+        angle = (ordinal % 12) * (2.0 * 3.141592653589793 / 12.0)
+        return float(base[0] + (radius * math.cos(angle))), float(base[1] + (radius * math.sin(angle)))
+
+    # "queue" lines agents near the entry (useful for demos).
+    if spot_name == "queue":
+        base = entry or inside or center
+        step = 18.0
+        return float(base[0] + (ordinal * step)), float(base[1] + 10.0)
+
+    # Unknown spot: deterministic micro-jitter around requested anchor.
+    base = _building_anchor_point(building_id, anchor) or inside or center or entry
+    ox, oy = _stable_offset(f"{building_id}:{spot_name}:{entity_id}", max_abs=14)
+    return float(base[0] + ox), float(base[1] + oy)
+
+
+def _nearest_building_id(x: float, y: float, building_entries: dict[str, tuple[float, float]]) -> str | None:
+    nearest = None
+    nearest_d = None
+    for b_id, (bx, by) in building_entries.items():
+        d = ((x - bx) ** 2) + ((y - by) ** 2)
+        if nearest_d is None or d < nearest_d:
+            nearest = b_id
+            nearest_d = d
+    return nearest
+
+
+def _hub_destination(
+    shared: dict,
+    hub_key: str,
+    suffix: str,
+    anchor: str = "center",
+    default: tuple[float, float] = (912.0, 1168.0),
+) -> tuple[str, float, float]:
+    movement = shared.setdefault("movement", {})
+    hubs = movement.setdefault("role_hubs", {})
+    for key, value in ROLE_HUB_DEFAULTS.items():
+        hubs.setdefault(key, value)
+    bid = str(hubs.get(hub_key, ROLE_HUB_DEFAULTS.get(hub_key, ""))).strip().upper()
+    if not bid:
+        bid = ROLE_HUB_DEFAULTS.get(hub_key, "B08")
+
+    target = (
+        _building_anchor_point(bid, anchor)
+        or _building_anchor_point(bid, "center")
+        or _building_anchor_point(bid, "inside")
+        or _building_anchor_point(bid, "entry")
+        or default
+    )
+    catalog = _load_building_catalog()
+    b_name = bid
+    for b in catalog.get("buildings", []):
+        if str(b.get("id", "")).upper() == bid:
+            b_name = str(b.get("name", bid))
+            break
+    label = f"{bid} {b_name} | {suffix}".strip()
+    return label, float(target[0]), float(target[1])
+
+
+def _resolve_destination(
+    shared: dict,
+    entity: dict,
+    latest_event: dict | None,
+    entities: dict,
+    tick: int,
+) -> tuple[str, float, float]:
+    role = str(entity.get("persona_role", entity.get("type", "resident"))).lower()
     action = _infer_actor_action(entity, latest_event)
     entity_id = str(entity.get("id", ""))
-    force_retarget = _bridge_stuck_retarget(entity, entity_id, action, tick)
+    _bridge_stuck_retarget(entity, entity_id, action, tick)
 
     if role == "worker":
-        if action == "work":
-            return _bridge_roam_goal(entity, entity_id, tick, WORK_SECTORS, "work", hold_ticks=16)
+        route = str(entity.get("work_route", "to_mine"))
+        haul_mode = str(entity.get("haul_mode", ""))
+        if action in {"return_home", "store_home"} or route == "to_home" or haul_mode == "return_home":
+            return _hub_destination(shared, "worker_home", "Worker Home", anchor="center")
+        if action in {"work", "commute_mine"} or route == "to_mine":
+            return _hub_destination(shared, "worker_work", "Worker Work", anchor="center")
         if action == "bank":
-            return _bridge_roam_goal(entity, entity_id, tick, BANK_SECTORS, "bank", hold_ticks=14)
-        return _bridge_roam_goal(
-            entity, entity_id, tick, MAP_ROAM_SECTORS, "roam", hold_ticks=14, force_retarget=force_retarget
-        )
+            return _hub_destination(shared, "bank_home", "Bank Home", anchor="center")
+        return _hub_destination(shared, "worker_home", "Worker Home", anchor="center")
+
+    if role == "spy":
+        return _hub_destination(shared, "spy_home", "Spy Home", anchor="center")
 
     if role in {"bank", "banker"}:
-        banker_sectors = BANK_SECTORS + WORK_SECTORS + ["Johnson Park", "Hobbs Cafe"]
-        return _bridge_roam_goal(
-            entity, entity_id, tick, banker_sectors, "banker", hold_ticks=20, force_retarget=force_retarget
-        )
+        return _hub_destination(shared, "bank_home", "Bank Home", anchor="center")
 
     if role == "thief":
         target_id = entity.get("target") or (latest_event or {}).get("target_id")
@@ -345,26 +499,19 @@ def _resolve_destination(entity: dict, latest_event: dict | None, entities: dict
                 tx = float(target.get("x", 0.0) or 0.0)
                 ty = float(target.get("y", 0.0) or 0.0)
                 return "target", tx, ty
-            return _bridge_roam_goal(entity, entity_id, tick, BANK_SECTORS + ["The Rose and Crown Pub"], "steal", hold_ticks=10)
+            return _hub_destination(shared, "thief_home", "Thief Home", anchor="center")
         if action == "bank":
-            return _bridge_roam_goal(entity, entity_id, tick, BANK_SECTORS, "bank", hold_ticks=12)
-        return _bridge_roam_goal(
-            entity, entity_id, tick, MAP_ROAM_SECTORS, "roam", hold_ticks=10, force_retarget=force_retarget
-        )
+            return _hub_destination(shared, "bank_home", "Bank Home", anchor="center")
+        return _hub_destination(shared, "thief_home", "Thief Home", anchor="center")
 
     if role == "cop":
         target_id = entity.get("target") or (latest_event or {}).get("target_id")
         target = entities.get(target_id) if target_id else None
         if action == "chase" and target:
             return "target", float(target.get("x", 0.0) or 0.0), float(target.get("y", 0.0) or 0.0)
-        patrol_sectors = COP_PATROL_SECTORS + MAP_ROAM_SECTORS
-        return _bridge_roam_goal(
-            entity, entity_id, tick, patrol_sectors, "patrol", hold_ticks=10, force_retarget=force_retarget
-        )
+        return _hub_destination(shared, "cop_home", "Cop Home", anchor="center")
 
-    return _bridge_roam_goal(
-        entity, entity_id, tick, MAP_ROAM_SECTORS, "default", hold_ticks=14, force_retarget=force_retarget
-    )
+    return _hub_destination(shared, "worker_home", "Worker Home", anchor="center")
 
 
 def get_state():
@@ -379,11 +526,20 @@ def get_events():
 
 def _infer_actor_action(entity: dict, latest_event: dict | None) -> str:
     role = str(entity.get("type", "resident"))
+    top_action = str(entity.get("top_action", "")).strip().lower()
     event_type = str((latest_event or {}).get("type", ""))
     if role == "cop" and entity.get("target"):
         return "chase"
 
     if role == "worker":
+        if top_action in {"commute_mine", "work", "return_home", "store_home"}:
+            return top_action
+        if event_type == "worker_store_home":
+            return "store_home"
+        if event_type == "worker_commute_home":
+            return "return_home"
+        if event_type == "worker_commute_mine":
+            return "commute_mine"
         if event_type == "worker_earn":
             return "work"
         if event_type.startswith("bank_"):
@@ -435,11 +591,11 @@ def build_smallville_frame(limit_events: int = 250, include_debug: bool = False)
     for entity_id, entity in entities.items():
         latest_event = last_event_by_actor.get(entity_id)
         action = _infer_actor_action(entity, latest_event)
-        dest_zone, dest_x, dest_y = _resolve_destination(entity, latest_event, entities, tick)
+        dest_zone, dest_x, dest_y = _resolve_destination(shared, entity, latest_event, entities, tick)
         actor = {
             "id": entity_id,
             "persona_type": ROLE_TO_SMALLVILLE.get(entity.get("type"), "resident"),
-            "role": entity.get("type"),
+            "role": entity.get("persona_role", entity.get("type")),
             "x": float(entity.get("x", 0.0) or 0.0),
             "y": float(entity.get("y", 0.0) or 0.0),
             "target_x": float(entity.get("target_x", entity.get("x", 0.0)) or 0.0),
@@ -455,6 +611,8 @@ def build_smallville_frame(limit_events: int = 250, include_debug: bool = False)
             "status_line": (
                 f"{action} | {entity.get('reflection', 'neutral')} | {dest_zone}"
             ),
+            "home_storage": float(entity.get("home_storage", 0.0) or 0.0),
+            "carried_cash": float(entity.get("carried_cash", 0.0) or 0.0),
         }
         actors.append(actor)
 
@@ -525,7 +683,7 @@ def spawn_entity(entity_id, entity_type, balance=0.0):
     if entity_type in {"bank", "banker"}:
         sx, sy = _sector_point(_pick_sector(BANK_SECTORS, entity_id), entity_id, spread=0.2)
     elif entity_type == "worker":
-        sx, sy = _home_coords(entity_id)
+        sx, sy = _sector_nav_point("artist's co-living space", entity_id)
     elif entity_type == "thief":
         sx, sy = _sector_point("The Rose and Crown Pub", entity_id, spread=0.45)
     elif entity_type == "cop":
@@ -571,6 +729,103 @@ def step_endpoint():
     return step()
 
 
+@router.get("/route/status")
+def route_status_endpoint():
+    movement = state.setdefault("movement", {})
+    route = movement.setdefault("global_route", {})
+    route.setdefault("enabled", True)
+    route.setdefault("sequence", [{"id": "B11", "anchor": "center"}, {"id": "B08", "anchor": "center"}])
+    route.setdefault("phase", 0)
+    route.setdefault("stage", "entry")
+    route.setdefault("stage_started_tick", int(state.setdefault("economy", {}).get("tick", 0)))
+    route.setdefault("hold_ticks", 24)
+    route.setdefault("hold_until_tick", 0)
+    route.setdefault("max_stage_ticks", 220)
+    route.setdefault("allow_stage_timeout", False)
+    route.setdefault("inside_stage_enabled", False)
+    route.setdefault("arrival_ratio", 1.0)
+    route.setdefault("arrival_radius", 36.0)
+    return {"status": "ok", "global_route": route}
+
+
+@router.post("/route/start")
+def route_start_endpoint():
+    movement = state.setdefault("movement", {})
+    route = movement.setdefault("global_route", {})
+    route["enabled"] = True
+    return {"status": "started", "global_route": route}
+
+
+@router.post("/route/stop")
+def route_stop_endpoint():
+    movement = state.setdefault("movement", {})
+    route = movement.setdefault("global_route", {})
+    route["enabled"] = False
+    return {"status": "stopped", "global_route": route}
+
+
+@router.post("/route/set")
+def route_set_endpoint(payload: dict):
+    """
+    Set global synchronized route.
+    Example:
+    {
+      "sequence": [{"id":"B11","anchor":"center"}, {"id":"B08","anchor":"center"}],
+      "phase": 0,
+      "hold_ticks": 24,
+      "max_stage_ticks": 220,
+      "allow_stage_timeout": false,
+      "inside_stage_enabled": false,
+      "arrival_ratio": 1.0,
+      "arrival_radius": 36.0,
+      "enabled": true
+    }
+    """
+    sequence = payload.get("sequence")
+    if not isinstance(sequence, list) or not sequence:
+        raise HTTPException(status_code=400, detail="sequence must be a non-empty list")
+    seq: list[dict] = []
+    for item in sequence:
+        if isinstance(item, dict):
+            bid = str(item.get("id", "")).strip().upper()
+            anchor = str(item.get("anchor", "center")).strip().lower() or "center"
+        else:
+            bid = str(item).strip().upper()
+            anchor = "center"
+        if anchor not in {"entry", "inside", "center"}:
+            anchor = "center"
+        if bid:
+            seq.append({"id": bid, "anchor": anchor})
+    if not seq:
+        raise HTTPException(status_code=400, detail="sequence cannot be empty")
+
+    catalog = _load_building_catalog()
+    valid_ids = {str(b.get("id", "")).upper() for b in catalog.get("buildings", [])}
+    unknown = [s["id"] for s in seq if s["id"] not in valid_ids]
+    if unknown:
+        raise HTTPException(status_code=400, detail=f"Unknown building IDs: {unknown}")
+
+    movement = state.setdefault("movement", {})
+    route = movement.setdefault("global_route", {})
+    now_tick = int(state.setdefault("economy", {}).get("tick", 0))
+    route["sequence"] = seq
+    route["phase"] = int(payload.get("phase", route.get("phase", 0))) % len(seq)
+    route["stage"] = str(payload.get("stage", "entry")).strip().lower() or "entry"
+    if route["stage"] not in {"entry", "inside"}:
+        route["stage"] = "entry"
+    route["stage_started_tick"] = now_tick
+    route["hold_ticks"] = max(1, int(payload.get("hold_ticks", route.get("hold_ticks", 24))))
+    route["hold_until_tick"] = now_tick + route["hold_ticks"]
+    route["max_stage_ticks"] = max(20, int(payload.get("max_stage_ticks", route.get("max_stage_ticks", 220))))
+    route["allow_stage_timeout"] = bool(payload.get("allow_stage_timeout", route.get("allow_stage_timeout", False)))
+    route["inside_stage_enabled"] = bool(payload.get("inside_stage_enabled", route.get("inside_stage_enabled", False)))
+    route["arrival_ratio"] = max(0.1, min(1.0, float(payload.get("arrival_ratio", route.get("arrival_ratio", 1.0)))))
+    route["arrival_radius"] = max(4.0, float(payload.get("arrival_radius", route.get("arrival_radius", 36.0))))
+    route["enabled"] = bool(payload.get("enabled", True))
+
+    return {"status": "updated", "global_route": route}
+
+
 @router.post("/spawn")
 def spawn_endpoint(entity_type: str, entity_id: str | None = None, balance: float = 0.0):
     try:
@@ -579,6 +834,77 @@ def spawn_endpoint(entity_type: str, entity_id: str | None = None, balance: floa
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {"status": "spawned", "entity": entity, "balance": state["balances"][resolved_id]}
+
+
+@router.post("/population/set")
+def set_population_endpoint(payload: dict):
+    """
+    Set full population in one call.
+    Example:
+    {
+      "workers": 2,
+      "cops": 1,
+      "bankers": 1,
+      "spies": 1,
+      "thieves": 0,
+      "banks": 0,
+      "clear_existing": true,
+      "start_balance": 5
+    }
+    """
+    workers = max(0, int(payload.get("workers", 0)))
+    cops = max(0, int(payload.get("cops", 0)))
+    bankers = max(0, int(payload.get("bankers", 0)))
+    spies = max(0, int(payload.get("spies", 0)))
+    thieves = max(0, int(payload.get("thieves", 0)))
+    banks = max(0, int(payload.get("banks", 0)))
+    clear_existing = bool(payload.get("clear_existing", True))
+    start_balance = float(payload.get("start_balance", 5.0))
+
+    target_total = workers + cops + bankers + spies + thieves + banks
+    if target_total > MAX_TOTAL_AGENTS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Requested total {target_total} exceeds MAX_TOTAL_AGENTS={MAX_TOTAL_AGENTS}",
+        )
+
+    entities = state.setdefault("entities", {})
+    balances = state.setdefault("balances", {})
+    if clear_existing:
+        entities.clear()
+        balances.clear()
+        state.setdefault("events", []).append(
+            {
+                "type": "population_reset",
+                "requested_total": target_total,
+                "network": "Arc",
+                "asset": "USDC",
+            }
+        )
+
+    created = []
+
+    def _spawn_many(prefix: str, count: int, entity_type: str, role_label: str | None = None):
+        for i in range(1, count + 1):
+            entity_id = f"{prefix}_{i}"
+            entity = spawn_entity(entity_id=entity_id, entity_type=entity_type, balance=start_balance)
+            if role_label:
+                entity["persona_role"] = role_label
+            created.append({"id": entity_id, "type": entity_type, "role": entity.get("persona_role", entity_type)})
+
+    _spawn_many("worker", workers, "worker")
+    _spawn_many("cop", cops, "cop")
+    _spawn_many("banker", bankers, "banker")
+    _spawn_many("spy", spies, "banker", role_label="spy")
+    _spawn_many("thief", thieves, "thief")
+    _spawn_many("bank", banks, "bank")
+
+    return {
+        "status": "ok",
+        "created_count": len(created),
+        "created": created,
+        "total_agents": len(state.setdefault("entities", {})),
+    }
 
 
 @router.get("/spawn/types")
@@ -700,3 +1026,310 @@ def get_map_areas_endpoint():
         "map": (_MAP_LAYOUT_CACHE or {}).get("meta", {"w": 140, "h": 100, "tile": 32}),
         "areas": {group: [_sector_footprint(name) for name in names] for group, names in sectors.items()},
     }
+
+
+@router.get("/map/buildings")
+def get_map_buildings_endpoint():
+    if not BUILDING_CATALOG_PATH.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "Building catalog missing. Run "
+                "'python backend/utils/build_building_catalog.py' first."
+            ),
+        )
+    try:
+        return json.loads(BUILDING_CATALOG_PATH.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to read building catalog: {exc}") from exc
+
+
+@router.get("/map/buildings/spots")
+def get_map_building_spots_endpoint():
+    catalog = _load_building_catalog()
+    buildings = catalog.get("buildings", []) if isinstance(catalog, dict) else []
+    out = []
+    for b in buildings:
+        b_id = str(b.get("id", "")).upper()
+        if not b_id:
+            continue
+        entry = _building_anchor_point(b_id, "entry")
+        inside = _building_anchor_point(b_id, "inside")
+        center = _building_anchor_point(b_id, "center")
+        meeting = _spot_target(b_id, "inside", "meeting", f"{b_id}_sample", 0)
+        desks = [_spot_target(b_id, "inside", "desks", f"{b_id}_desk_{i}", i) for i in range(6)]
+        out.append(
+            {
+                "id": b_id,
+                "name": b.get("name"),
+                "entry": {"x": float(entry[0]), "y": float(entry[1])} if entry else None,
+                "inside": {"x": float(inside[0]), "y": float(inside[1])} if inside else None,
+                "center": {"x": float(center[0]), "y": float(center[1])} if center else None,
+                "meeting": {"x": float(meeting[0]), "y": float(meeting[1])} if meeting else None,
+                "desks_preview": [{"x": float(p[0]), "y": float(p[1])} for p in desks if p],
+            }
+        )
+    return {
+        "supported_spots": ["anchor", "entry", "inside", "center", "meeting", "desks", "queue"],
+        "buildings": out,
+    }
+
+
+@router.get("/map/hubs")
+def get_role_hubs():
+    movement = state.setdefault("movement", {})
+    hubs = movement.setdefault("role_hubs", {})
+    defaults = {
+        "worker_home": "B08",
+        "worker_work": "B11",
+        "thief_home": "B07",
+        "cop_home": "B09",
+        "bank_home": "B12",
+        "spy_home": "B06",
+    }
+    for key, value in defaults.items():
+        hubs.setdefault(key, value)
+    return {"status": "ok", "role_hubs": hubs}
+
+
+@router.post("/map/hubs")
+def set_role_hubs(payload: dict):
+    defaults = {
+        "worker_home": "B08",
+        "worker_work": "B11",
+        "thief_home": "B07",
+        "cop_home": "B09",
+        "bank_home": "B12",
+        "spy_home": "B06",
+    }
+    catalog = _load_building_catalog()
+    valid_ids = {str(b.get("id", "")).upper() for b in catalog.get("buildings", [])}
+    movement = state.setdefault("movement", {})
+    hubs = movement.setdefault("role_hubs", {})
+    for key, value in defaults.items():
+        hubs.setdefault(key, value)
+
+    unknown = []
+    for key in defaults.keys():
+        if key not in payload:
+            continue
+        bid = str(payload.get(key, "")).strip().upper()
+        if not bid:
+            continue
+        if bid not in valid_ids:
+            unknown.append({key: bid})
+            continue
+        hubs[key] = bid
+
+    if unknown:
+        raise HTTPException(status_code=400, detail={"unknown_buildings": unknown})
+
+    # Re-enable natural movement around hubs and clear temporary command locks.
+    movement.setdefault("global_route", {})["enabled"] = False
+    cleared = 0
+    for entity in state.setdefault("entities", {}).values():
+        if isinstance(entity.get("manual_target"), dict):
+            entity.pop("manual_target", None)
+            cleared += 1
+    return {"status": "ok", "role_hubs": hubs, "cleared_manual_targets": cleared}
+
+
+@router.post("/move/buildings")
+def move_entities_by_building(payload: dict):
+    """
+    Move entities by building IDs.
+    Example payload:
+    {
+      "from_building_id": "B11",
+      "to_building_id": "B03",
+      "to_anchor": "center",
+      "entity_type": "worker"
+    }
+    """
+    catalog = _load_building_catalog()
+    buildings = catalog.get("buildings", [])
+    if not buildings:
+        raise HTTPException(status_code=404, detail="Building catalog missing or empty.")
+
+    b_map = {str(b.get("id")): b for b in buildings}
+    from_id = str(payload.get("from_building_id", "")).strip().upper()
+    to_id = str(payload.get("to_building_id", "")).strip().upper()
+    to_anchor = str(payload.get("to_anchor", "center")).strip().lower() or "center"
+    to_spot = str(payload.get("to_spot", "anchor")).strip().lower() or "anchor"
+    if to_anchor not in {"entry", "inside", "center"}:
+        raise HTTPException(status_code=400, detail="to_anchor must be one of: entry, inside, center")
+    entity_type = payload.get("entity_type")
+    if entity_type is not None:
+        entity_type = str(entity_type).strip().lower()
+
+    if to_id not in b_map:
+        raise HTTPException(status_code=400, detail=f"Unknown to_building_id: {to_id}")
+    if from_id and from_id not in b_map:
+        raise HTTPException(status_code=400, detail=f"Unknown from_building_id: {from_id}")
+
+    entries = {
+        str(b.get("id")): (
+            float(b.get("entry_px", {}).get("x", 0.0)),
+            float(b.get("entry_px", {}).get("y", 0.0)),
+        )
+        for b in buildings
+    }
+    anchor_target = _spot_target(to_id, to_anchor, to_spot, "seed", 0)
+    if not anchor_target:
+        raise HTTPException(status_code=400, detail=f"Missing anchor for {to_id}/{to_anchor}")
+    tx, ty = anchor_target
+
+    entities = state.setdefault("entities", {})
+    moved = []
+    skipped = []
+    matched_entities = []
+    for entity_id, entity in entities.items():
+        role = str(entity.get("type", "")).lower()
+        if entity_type and role != entity_type:
+            skipped.append(entity_id)
+            continue
+        ex = float(entity.get("x", 0.0) or 0.0)
+        ey = float(entity.get("y", 0.0) or 0.0)
+        if from_id:
+            nearest = _nearest_building_id(ex, ey, entries)
+            if nearest != from_id:
+                skipped.append(entity_id)
+                continue
+        matched_entities.append((entity_id, entity))
+
+    for ordinal, (entity_id, entity) in enumerate(matched_entities):
+        nx, ny = _spot_target(to_id, to_anchor, to_spot, entity_id, ordinal) or (tx, ty)
+        entity["x"] = nx
+        entity["y"] = ny
+        entity["target_x"] = nx
+        entity["target_y"] = ny
+        entity["manual_target"] = {
+            "active": True,
+            "building_id": to_id,
+            "anchor": to_anchor,
+            "spot": to_spot,
+            "x": nx,
+            "y": ny,
+            "persist": False,
+            "hold_ticks": 0,
+            "arrival_radius": 40.0,
+        }
+        moved.append(entity_id)
+
+    return {
+        "status": "ok",
+        "from_building_id": from_id or None,
+        "to_building_id": to_id,
+        "to_anchor": to_anchor,
+        "to_spot": to_spot,
+        "entity_type": entity_type,
+        "moved_count": len(moved),
+        "moved_entities": moved,
+        "skipped_count": len(skipped),
+    }
+
+
+@router.post("/command/go")
+def command_go_to_building(payload: dict):
+    """
+    Direct movement command using mapped building anchors.
+    Example:
+    {
+      "building_id": "B08",
+      "anchor": "center",
+      "spot": "desks",
+      "entity_type": "worker",
+      "entity_ids": ["worker_1", "worker_2"],
+      "persist": true,
+      "arrival_radius": 40,
+      "disable_global_route": true
+    }
+    """
+    building_id = str(payload.get("building_id", "")).strip().upper()
+    if not building_id:
+        raise HTTPException(status_code=400, detail="building_id is required")
+    anchor = str(payload.get("anchor", "center")).strip().lower() or "center"
+    spot = str(payload.get("spot", "anchor")).strip().lower() or "anchor"
+    if anchor not in {"entry", "inside", "center"}:
+        raise HTTPException(status_code=400, detail="anchor must be one of: entry, inside, center")
+    target = _spot_target(building_id, anchor=anchor, spot=spot, entity_id="seed", ordinal=0)
+    if not target:
+        raise HTTPException(status_code=400, detail=f"Unknown building_id or anchor: {building_id}/{anchor}")
+
+    entity_type = payload.get("entity_type")
+    if entity_type is not None:
+        entity_type = str(entity_type).strip().lower()
+        if entity_type not in ALLOWED_ENTITY_TYPES:
+            raise HTTPException(status_code=400, detail=f"Invalid entity_type: {entity_type}")
+    raw_ids = payload.get("entity_ids")
+    selected_ids = None
+    if isinstance(raw_ids, list) and raw_ids:
+        selected_ids = {str(x).strip() for x in raw_ids if str(x).strip()}
+    persist = bool(payload.get("persist", False))
+    hold_ticks = max(0, int(payload.get("hold_ticks", 0) or 0))
+    arrival_radius = max(8.0, float(payload.get("arrival_radius", 40.0)))
+    disable_global_route = bool(payload.get("disable_global_route", False))
+
+    movement = state.setdefault("movement", {})
+    if disable_global_route:
+        movement.setdefault("global_route", {})["enabled"] = False
+
+    entities = state.setdefault("entities", {})
+    moved = []
+    skipped = []
+    matched_entities = []
+    for entity_id, entity in entities.items():
+        role = str(entity.get("type", "")).lower()
+        if entity_type and role != entity_type:
+            skipped.append(entity_id)
+            continue
+        if selected_ids is not None and entity_id not in selected_ids:
+            skipped.append(entity_id)
+            continue
+        matched_entities.append((entity_id, entity))
+
+    for ordinal, (entity_id, entity) in enumerate(matched_entities):
+        tx, ty = _spot_target(building_id, anchor=anchor, spot=spot, entity_id=entity_id, ordinal=ordinal) or target
+        entity["manual_target"] = {
+            "active": True,
+            "building_id": building_id,
+            "anchor": anchor,
+            "spot": spot,
+            "x": float(tx),
+            "y": float(ty),
+            "persist": persist,
+            "hold_ticks": hold_ticks,
+            "arrival_radius": arrival_radius,
+        }
+        entity["target_x"] = float(tx)
+        entity["target_y"] = float(ty)
+        moved.append(entity_id)
+
+    return {
+        "status": "ok",
+        "building_id": building_id,
+        "anchor": anchor,
+        "spot": spot,
+        "persist": persist,
+        "hold_ticks": hold_ticks,
+        "target_x": float(target[0]),
+        "target_y": float(target[1]),
+        "moved_count": len(moved),
+        "moved_entities": moved,
+        "skipped_count": len(skipped),
+        "global_route_enabled": bool(movement.get("global_route", {}).get("enabled", False)),
+    }
+
+
+@router.post("/command/clear")
+def clear_commands(entity_type: str | None = None):
+    entities = state.setdefault("entities", {})
+    cleared = []
+    for entity_id, entity in entities.items():
+        role = str(entity.get("type", "")).lower()
+        if entity_type and role != str(entity_type).strip().lower():
+            continue
+        if isinstance(entity.get("manual_target"), dict):
+            entity.pop("manual_target", None)
+            cleared.append(entity_id)
+    return {"status": "ok", "cleared_count": len(cleared), "cleared_entities": cleared}

@@ -3,9 +3,23 @@
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $backendDir = Join-Path $root 'backend'
 $gaFrontendDir = Join-Path $root 'generative_agents\environment\frontend_server'
-$pythonExe = 'C:\Users\Admin\miniconda3\python.exe'
+$backendPythonCandidates = @(
+  $env:AGENTIC_BACKEND_PYTHON_EXE,
+  $env:AGENTIC_PYTHON_EXE,
+  'C:\Python314\python.exe',
+  'C:\Users\Admin\miniconda3\python.exe'
+) | Where-Object { $_ -and $_.Trim() -ne '' }
+$backendPythonExe = $backendPythonCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+
+$frontendPythonCandidates = @(
+  $env:AGENTIC_FRONTEND_PYTHON_EXE,
+  'C:\Users\Admin\miniconda3\python.exe',
+  $backendPythonExe
+) | Where-Object { $_ -and $_.Trim() -ne '' }
+$frontendPythonExe = $frontendPythonCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
 $backendPort = 8000
 $frontendPort = 8010
+$forceRestart = $true
 
 function Test-PortListening([int]$Port) {
   try {
@@ -23,6 +37,24 @@ function Stop-PortProcess([int]$Port) {
     foreach ($pid in $pids) {
       if ($pid -and $pid -ne $PID) {
         try { Stop-Process -Id $pid -Force -ErrorAction Stop } catch {}
+      }
+    }
+  } catch {}
+}
+
+function Stop-AgenticServerProcesses {
+  $patterns = @(
+    '*uvicorn*main:app*',
+    '*manage.py runserver 127.0.0.1:8010*'
+  )
+  try {
+    $procs = Get-CimInstance Win32_Process | Where-Object {
+      $cmd = $_.CommandLine
+      $cmd -and (($patterns | Where-Object { $cmd -like $_ }).Count -gt 0)
+    }
+    foreach ($p in $procs) {
+      if ($p.ProcessId -and $p.ProcessId -ne $PID) {
+        try { Stop-Process -Id $p.ProcessId -Force -ErrorAction Stop } catch {}
       }
     }
   } catch {}
@@ -49,18 +81,31 @@ function Test-HttpQuick([string]$Url, [int]$TimeoutSec = 4) {
   }
 }
 
-if (-not (Test-Path $pythonExe)) { throw "Python not found at $pythonExe" }
+if (-not (Test-Path $backendPythonExe)) { throw "Backend Python not found at $backendPythonExe" }
+if (-not (Test-Path $frontendPythonExe)) { throw "Frontend Python not found at $frontendPythonExe" }
 if (-not (Test-Path (Join-Path $backendDir 'main.py'))) { throw "backend/main.py not found in $backendDir" }
 if (-not (Test-Path (Join-Path $gaFrontendDir 'manage.py'))) { throw "manage.py not found in $gaFrontendDir" }
 
+# Fail fast if runtime interpreter does not have the Circle SDK import path.
+$circleImport = & $backendPythonExe -c "from circle.web3 import developer_controlled_wallets as _dcw; print('ok')" 2>&1
+if ($LASTEXITCODE -ne 0) {
+  $reqPath = Join-Path $backendDir 'requirements.txt'
+  throw "Circle SDK import check failed for $backendPythonExe. Install backend deps with: `"$backendPythonExe`" -m pip install -r `"$reqPath`". Details: $circleImport"
+}
+
 # 1) Backend API
-if ((Test-PortListening $backendPort) -and (-not (Test-HttpQuick "http://127.0.0.1:$backendPort/api/state" 3))) {
+Stop-AgenticServerProcesses
+Start-Sleep -Milliseconds 700
+if ($forceRestart -and (Test-PortListening $backendPort)) {
+  Stop-PortProcess $backendPort
+  Start-Sleep -Milliseconds 700
+} elseif ((Test-PortListening $backendPort) -and (-not (Test-HttpQuick "http://127.0.0.1:$backendPort/api/state" 3))) {
   Stop-PortProcess $backendPort
   Start-Sleep -Milliseconds 600
 }
 
 if (-not (Test-PortListening $backendPort)) {
-  $backendCmd = "`$env:TX_REAL_MODE='off'; `$env:SETTLEMENT_STRATEGY='off'; `$env:CIRCLE_POLL_ATTEMPTS='1'; & `"$pythonExe`" -m uvicorn main:app --host 127.0.0.1 --port $backendPort"
+  $backendCmd = "`$env:TX_REAL_MODE='off'; `$env:SETTLEMENT_STRATEGY='off'; `$env:CIRCLE_POLL_ATTEMPTS='1'; `$env:FORCE_SINGLE_TARGET='0'; & `"$backendPythonExe`" -m uvicorn main:app --host 127.0.0.1 --port $backendPort"
   Start-Process powershell -WorkingDirectory $backendDir -ArgumentList '-NoExit','-Command',$backendCmd | Out-Null
   Start-Sleep -Seconds 2
 }
@@ -93,16 +138,62 @@ try {
       }
     }
   }
+
+  # Ensure one spy exists in demo population (banker subtype with role=spy).
+  try {
+    $spyPayload = @{
+      workers = 0
+      cops = 0
+      bankers = 0
+      spies = 1
+      thieves = 0
+      banks = 0
+      clear_existing = $false
+      start_balance = 5
+    } | ConvertTo-Json -Depth 3
+    Invoke-RestMethod -Uri "http://127.0.0.1:$backendPort/api/population/set" `
+      -Method Post `
+      -ContentType "application/json" `
+      -Body $spyPayload `
+      -TimeoutSec 8 | Out-Null
+  } catch {}
+} catch {}
+
+# 2.5) Default to role-hub mode (route disabled unless explicitly enabled)
+try {
+  $routePayload = @{
+    sequence = @(
+      @{ id = "B11"; anchor = "center" },
+      @{ id = "B08"; anchor = "center" }
+    )
+    phase = 0
+    stage = "entry"
+    hold_ticks = 30
+    max_stage_ticks = 220
+    allow_stage_timeout = $false
+    inside_stage_enabled = $false
+    arrival_ratio = 1.0
+    arrival_radius = 28
+    enabled = $false
+  } | ConvertTo-Json -Depth 4
+  Invoke-RestMethod -Uri "http://127.0.0.1:$backendPort/api/route/set" `
+    -Method Post `
+    -ContentType "application/json" `
+    -Body $routePayload `
+    -TimeoutSec 8 | Out-Null
 } catch {}
 
 # 3) Smallville frontend in bridge mode
-if ((Test-PortListening $frontendPort) -and (-not (Test-HttpQuick "http://127.0.0.1:$frontendPort/simulator_home" 3))) {
+if ($forceRestart -and (Test-PortListening $frontendPort)) {
+  Stop-PortProcess $frontendPort
+  Start-Sleep -Milliseconds 700
+} elseif ((Test-PortListening $frontendPort) -and (-not (Test-HttpQuick "http://127.0.0.1:$frontendPort/simulator_home" 3))) {
   Stop-PortProcess $frontendPort
   Start-Sleep -Milliseconds 600
 }
 
 if (-not (Test-PortListening $frontendPort)) {
-  $frontendCmd = "`$env:SMALLVILLE_MODE='bridge'; `$env:SMALLVILLE_BRIDGE_URL='http://127.0.0.1:$backendPort/api/bridge/smallville'; `$env:SMALLVILLE_BRIDGE_STEP_ON_POLL='1'; & `"$pythonExe`" manage.py runserver 127.0.0.1:$frontendPort"
+  $frontendCmd = "`$env:SMALLVILLE_MODE='bridge'; `$env:SMALLVILLE_BRIDGE_URL='http://127.0.0.1:$backendPort/api/bridge/smallville'; `$env:SMALLVILLE_BRIDGE_STEP_ON_POLL='1'; & `"$frontendPythonExe`" manage.py runserver 127.0.0.1:$frontendPort"
   Start-Process powershell -WorkingDirectory $gaFrontendDir -ArgumentList '-NoExit','-Command',$frontendCmd | Out-Null
   Start-Sleep -Seconds 2
 }

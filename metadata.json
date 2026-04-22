@@ -155,5 +155,12 @@
             "author": "hurtiii"
         }
     ],
-    "spellcheckIsEnabled": false
+    "spellcheckIsEnabled": false,
+    "users": [
+        {
+            "userName": "hurtiii",
+            "codexVersion": "1.105.1",
+            "updatedAt": 1776872985251
+        }
+    ]
 }

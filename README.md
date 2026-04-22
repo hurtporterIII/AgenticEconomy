@@ -16,11 +16,11 @@ AgenticEconomy is a live multi-agent economic simulation where autonomous agents
 
 ## How To Run
 
-1. Backend dependencies:
+1. Backend dependencies (use the same interpreter as `start_smallville.ps1`):
 ```bash
-pip install -r backend/requirements.txt
-pip install circle-developer-controlled-wallets
+C:\Python314\python.exe -m pip install -r backend/requirements.txt
 ```
+Do not install `circle-sdk` for this project; backend runtime imports `circle.web3`, which is provided by `circle-developer-controlled-wallets`.
 2. Configure environment in [`.env`](C:\Users\Admin\Desktop\HACKATHON\COmpatetion Folder\AgenticEconomy\.env):
 ```env
 CIRCLE_API_KEY=...
