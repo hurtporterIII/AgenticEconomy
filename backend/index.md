@@ -1,23 +1,36 @@
+---
+title: Backend index
+system: agentic-economy-backend
+tags:
+  - backend
+  - fastapi
+  - simulation
+  - action-queue
+  - economy
+ai_summary: >-
+  Backend service for simulation ticks, movement targets, and economy events.
+  Most edits route to api/endpoints.py, core/loop.py, core/action_queue.py, and
+  core/nano_economy.py.
+---
+
 # backend
 
-Path: `backend`
+## Core folders
 
-## Summary
-- Subfolders: 9
-- Files: 2
-- File types: .py:1, .txt:1
+- `api/` — HTTP routes (`/state`, `/step`, `/economy/health`, `/agents/*`).
+- `core/` — loop, state, POIs/navmesh, action queue, nano-economy.
+- `agents/` — worker/thief/cop/banker behavior handlers.
+- `actions/` — action primitives used by agents.
+- `tx/` — transaction submitters and Arc helpers.
+- `bank/` — debit/credit engine and balances.
+- `store/` — runtime JSON/JSONL artifacts.
+- `services/` — model/oracle adapters.
+- `utils/` — helper scripts/utilities.
 
-## Folders
-- actions: Module folder for actions.
-- agents: Role-specific agent behavior handlers.
-- api: HTTP API endpoints and bridge interfaces.
-- bank: Module folder for bank.
-- core: Core loop/state and shared runtime logic.
-- services: Module folder for services.
-- store: Runtime state storage and generated catalogs.
-- tx: Transaction submission/inspection modules.
-- utils: Module folder for utils.
+## High-value files
 
-## Files
-- main.py: Python logic file for runtime behavior.
-- requirements.txt: Plain text file.
+- `main.py` — app creation + startup validation.
+- `api/endpoints.py` — primary API and bridge payload assembly.
+- `core/loop.py` — tick orchestration + movement target assignment.
+- `core/action_queue.py` — event-to-action mapping + queue execution.
+- `core/nano_economy.py` — spy/thief/cop economic flow and invariants.

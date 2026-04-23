@@ -1,13 +1,20 @@
+---
+title: Config index
+system: configuration
+tags:
+  - config
+  - constants
+  - pricing
+  - yaml
+ai_summary: >-
+  Configuration and constants used by the simulation. Keep values centralized
+  here and reference these files from runtime modules.
+---
+
 # config
 
-Path: `config`
-
-## Summary
-- Subfolders: 0
-- Files: 3
-- File types: .py:2, .yaml:1
-
 ## Files
-- config.yaml: YAML configuration file.
-- constants.py: Python logic file for runtime behavior.
-- pricing.py: Python logic file for runtime behavior.
+
+- `config.yaml` — environment/config defaults.
+- `constants.py` — shared constants.
+- `pricing.py` — pricing/economic parameter helpers.

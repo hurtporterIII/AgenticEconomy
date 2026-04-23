@@ -1,14 +1,21 @@
+---
+title: Documentation index
+system: docs
+tags:
+  - docs
+  - architecture
+  - demo
+  - reference
+ai_summary: >-
+  Project documentation hub. Start here for architecture context, demo notes,
+  and reference material before changing system behavior.
+---
+
 # docs
 
-Path: `docs`
+## Documents
 
-## Summary
-- Subfolders: 0
-- Files: 4
-- File types: .md:4
-
-## Files
-- architecture.md: Documentation or notes.
-- building_catalog.md: Documentation or notes.
-- demo.md: Documentation or notes.
-- feedback.md: Documentation or notes.
+- `architecture.md` — system architecture and major modules.
+- `building_catalog.md` — building/location references.
+- `demo.md` — demo flow and presentation notes.
+- `feedback.md` — iterative feedback and tuning notes.

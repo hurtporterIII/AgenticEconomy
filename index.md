@@ -1,36 +1,42 @@
+---
+title: AgenticEconomy — project index
+system: agentic-economy
+tags:
+  - navigation
+  - backend
+  - frontend
+  - smallville
+  - economy
+ai_summary: >-
+  Root navigation for the AgenticEconomy hackathon project. Backend simulation,
+  movement, and economy logic live in backend/. Phaser UI lives in frontend/.
+  Smallville bridge and legacy assets live in generative_agents/. Use this file
+  to quickly route edits to the right folder.
+---
+
 # AgenticEconomy
 
-Path: `.`
+## Quick map
 
-## Summary
-- Subfolders: 7
-- Files: 17
-- File types: <none>:4, .json:4, .ps1:4, .demo_backup:1, .example:1, .docx:1, .md:1, .py:1
+- `backend/` — FastAPI endpoints, simulation loop, action queue, nano-economy.
+- `frontend/` — Phaser/Vite app, dashboard cards, labels, counters.
+- `generative_agents/` — Smallville Django bridge + map/static assets.
+- `docs/` — architecture, demo notes, catalog docs.
+- `config/` — constants and pricing/config rules.
+- `wallet_setup/` — wallet scripts and provisioning helpers.
 
-## Folders
-- AgenticEconomy: Module folder for AgenticEconomy.
-- backend: Backend simulation engine and API services.
-- config: Configuration constants and pricing rules.
-- docs: Project documentation and architecture notes.
-- frontend: Frontend runtime and UI assets.
-- generative_agents: Smallville/Generative Agents integration workspace.
-- wallet_setup: Wallet provisioning and key material utilities.
+## High-value entry points
 
-## Files
-- .env: General file artifact.
-- .env.demo_backup: General file artifact.
-- .env.example: General file artifact.
-- .gitattributes: General file artifact.
-- .gitignore: General file artifact.
-- Hackathon agentecono.docx: Word document asset.
-- LICENSE: General file artifact.
-- README.md: Documentation or notes.
-- chaos_local_result.json: Structured data or configuration.
-- chaos_result.json: Structured data or configuration.
-- generate_structure.py: Python logic file for runtime behavior.
-- health_smallville.ps1: PowerShell automation script.
-- metadata.json: Structured data or configuration.
-- prelaunch_result.json: Structured data or configuration.
-- reindex_structure.ps1: PowerShell automation script.
-- start_smallville.ps1: PowerShell automation script.
-- stop_smallville.ps1: PowerShell automation script.
+- API bootstrap: `backend/main.py`
+- Main API routes: `backend/api/endpoints.py`
+- Simulation loop: `backend/core/loop.py`
+- Action queue engine: `backend/core/action_queue.py`
+- Frontend runtime: `frontend/src/game.js`
+- Card/UI renderer: `frontend/src/ui/dashboard.js`
+
+## Operations scripts
+
+- Start services: `start_smallville.ps1`
+- Stop services: `stop_smallville.ps1`
+- Health check: `health_smallville.ps1`
+- Regenerate index/meta: `reindex_structure.ps1` (runs `generate_structure.py`)

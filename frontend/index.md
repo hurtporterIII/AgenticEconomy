@@ -1,17 +1,31 @@
+---
+title: Frontend index
+system: agentic-economy-frontend
+tags:
+  - frontend
+  - phaser
+  - vite
+  - dashboard
+  - visualization
+ai_summary: >-
+  Phaser/Vite frontend for rendering agents, labels, counters, and narrative
+  cards from backend API state. Most UI changes happen in src/game.js,
+  src/scenes/MainScene.js, and src/ui/dashboard.js.
+---
+
 # frontend
 
-Path: `frontend`
+## Core folders
 
-## Summary
-- Subfolders: 1
-- Files: 4
-- File types: .json:2, .html:1, .js:1
+- `src/scenes/` — Phaser scene logic (sprite movement/label rendering).
+- `src/ui/` — dashboard, controls, overlays.
+- `src/api/` — API client wrappers.
+- `src/assets/` — sprites/images.
 
-## Folders
-- src: Module folder for src.
+## High-value files
 
-## Files
-- index.html: HTML template or page.
-- package-lock.json: Structured data or configuration.
-- package.json: Structured data or configuration.
-- vite.config.js: JavaScript runtime logic.
+- `src/game.js` — app boot + sync/poll orchestration.
+- `src/scenes/MainScene.js` — world/sprite state application.
+- `src/ui/dashboard.js` — side-panel cards and event feed.
+- `src/styles.css` — visual styling for cards/panels.
+- `index.html` — Vite mount shell.
