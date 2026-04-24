@@ -45,11 +45,11 @@ This project uses **Circle’s nanopayment-style flows on Arc (USDC)** so many i
 
 ### How To Run
 
-1. Backend dependencies (use the same interpreter as `start_smallville.ps1`):
+1. Backend dependencies (Python 3.11+ recommended):
 ```bash
-C:\Python314\python.exe -m pip install -r backend/requirements.txt
+python -m pip install -r backend/requirements.txt
 ```
-On other machines, use your Python 3.11+ binary instead of `C:\Python314\python.exe`.
+On Windows, `start_smallville.ps1` auto-picks a known interpreter if `python` is not on `PATH`.
 
 Do not install `circle-sdk` for this project; backend runtime imports `circle.web3`, which is provided by `circle-developer-controlled-wallets`.
 2. Configure environment in repo-root `.env` (create from your secrets; never commit the file):

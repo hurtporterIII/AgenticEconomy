@@ -1,6 +1,4 @@
 {% load staticfiles %}
-<div style="position:fixed;top:42px;right:4px;z-index:999999;font:11px monospace;background:#e3f2fd;padding:2px 8px;border:1px solid #333;">TEST_DEMO_SCRIPT</div>
-
 <script type="text/javascript">
 	/*
 	  Main resources: 
@@ -304,7 +302,6 @@
 			let down_walk_name = persona_name + "-down-walk";
 			let up_walk_name = persona_name + "-up-walk";
 
-			console.log(persona_name, left_walk_name, "DEUBG")
 		  anims.create({
 		    key: left_walk_name,
 		    frames: anims.generateFrameNames(persona_name, { prefix: "left-walk.", start: 0, end: 3, zeroPad: 3 }),
@@ -447,7 +444,7 @@
 	        }
 
 	        curr_pronunciatio.x = curr_persona.body.x + 18; 
-          curr_pronunciatio.y = curr_persona.body.y - 42 - 25; // DEBUG 1 --- I added 32 offset on Dec 29. 
+          curr_pronunciatio.y = curr_persona.body.y - 42 - 25; // Nameplate vertical offset (px). 
           curr_speech_bubble.x = curr_persona.body.x + 80; 
           curr_speech_bubble.y = curr_persona.body.y - 39;
 

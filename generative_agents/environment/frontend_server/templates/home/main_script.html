@@ -1,5 +1,4 @@
 {% load staticfiles %}
-<div style="position:fixed;top:42px;right:4px;z-index:999999;font:11px monospace;background:#fff9c4;padding:2px 8px;border:1px solid #333;">TEST_MAIN_SCRIPT</div>
 
 <div id="step" style="display:none">{{step}}</div>
 <div id="sim_code" style="display:none">{{sim_code}}</div>
@@ -11,8 +10,6 @@
 </div>
 
 <script type="text/javascript">
-	console.log("🔥 MAIN_SCRIPT LIVE VERSION 2");
-	console.log("🔥 SMALLVILLE RENDER ACTIVE");
 	/*
 	  Main resources: 
 	  https://www.youtube.com/watch?v=cKIG1lKwLeo&t=401s&ab_channel=HongLy
@@ -625,7 +622,6 @@
 	}
 
 	function create() {
-	  console.log("PHASER CREATE RUNNING");
 	  try {
 	  const map = this.make.tilemap({ key: "map" });
 	  bridge_map_width_tiles = map.width;
@@ -746,7 +742,7 @@
 	    let new_sprite = this.physics.add
 	                         .sprite(start_pos[0], start_pos[1], "atlas", "misa-front")
 	                         .setSize(30, 40)
-	                         .setOffset(0, 32); // DEBUG 1 --- I added 32 offset on Dec 29. 
+	                         .setOffset(0, 32); // Nameplate vertical offset (px). 
 	    // Here, we are creating the persona and its pronunciatio sprites.
 	    personas[persona_name] = new_sprite;
 	    bridge_target[persona_name] = [new_sprite.x, new_sprite.y];
@@ -756,7 +752,7 @@
 	    bridge_last_sprite_xy[persona_name] = [new_sprite.x, new_sprite.y];
 	    pronunciatios[persona_name] = this.add.text(
 	                                   new_sprite.x - 6, 
-	                                   new_sprite.y - 42 - 32, // DEBUG 1 --- I added 32 offset on Dec 29. 
+	                                   new_sprite.y - 42 - 32, // Nameplate vertical offset (px). 
 	                                   "🦁", {
 	                                   font: "28px monospace", 
 	                                   fill: "#000000", 
@@ -1147,7 +1143,6 @@
 	        if (curr_role_title) curr_role_title.setText(roleTitleFromName(curr_persona_name));
 	      }
 
-	      console.log(curr_persona_name);
 	      if (execute_count > 0) {
 	        if (curr_persona.body.x < movement_target[curr_persona_name][0]) {
 	          curr_persona.body.x += movement_speed; 
@@ -1174,7 +1169,7 @@
 	        }
 
 	        curr_pronunciatio.x = curr_persona.body.x - 6; 
-          curr_pronunciatio.y = curr_persona.body.y - 42 - 32; // DEBUG 1 --- I added 32 offset on Dec 29. 
+          curr_pronunciatio.y = curr_persona.body.y - 42 - 32; // Nameplate vertical offset (px). 
           if (curr_role_title) {
           	curr_role_title.x = curr_persona.body.x;
           	curr_role_title.y = curr_persona.body.y - 78 - 32;
@@ -1318,6 +1313,5 @@ if (bank_reset_button) {
 pollBankTxDiagnosticsIfNeeded(true);
 
 	// FORCE PHASER START (engine-only test): no async boot, no spawn guards.
-	console.log("FORCING PHASER START");
 	game = new Phaser.Game(config);
 </script>
