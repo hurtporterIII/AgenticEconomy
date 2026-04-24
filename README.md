@@ -49,6 +49,13 @@ Use these scripts from the repository root to avoid manual startup drift.
 ```powershell
 powershell -ExecutionPolicy Bypass -File ".\start_smallville.ps1"
 ```
+   By default the backend **loads repo `.env` with override** so keys are not shadowed by empty shell vars. For a **zero-keys motion demo** that forces simulated settlement, use `-SimOnly` (sets `AGENTIC_SIM_ONLY` for the backend process):
+```powershell
+powershell -ExecutionPolicy Bypass -File ".\start_smallville.ps1" -SimOnly
+```
+   The Vite UI shows **SIMULATION / SETUP REQUIRED / LIVE** in the top bar, driven by `/api/tx/diagnostics`.
+
+   **Smooth bridge motion:** `start_smallville.ps1` starts FastAPI with a background **auto-tick** (`AUTO_TICK_MS`, default 100ms in `backend/main.py`) and sets `SMALLVILLE_BRIDGE_STEP_ON_POLL=0` on Django. The browser only **reads** actor positions; it does not advance the sim on every poll. That avoids double-stepping and removes the stop–start jerkiness you get when every HTTP poll also calls `/api/step`. If you use a different backend without auto-tick, set `SMALLVILLE_BRIDGE_STEP_ON_POLL=1` when running `manage.py`.
 
 2. Verify full health (API + bridge + frontend + movement signal):
 ```powershell
@@ -67,7 +74,52 @@ powershell -ExecutionPolicy Bypass -File ".\reindex_structure.ps1"
 
 Notes:
 - Do not run manual `uvicorn` / `manage.py` commands in parallel shells unless debugging.
-- Keep all API keys in [`.env`](C:\Users\Admin\Desktop\HACKATHON\COmpatetion Folder\AgenticEconomy\.env) only.
+- Keep all API keys in repo-root `.env` only (never commit `.env`).
+
+## Legacy Command Compatibility (Phase 1/2)
+
+When moving from old Smallville operator commands to the new API setup, use:
+
+- `POST /api/legacy/command`
+
+Single command example:
+
+```bash
+curl -X POST "http://127.0.0.1:8000/api/legacy/command" ^
+  -H "Content-Type: application/json" ^
+  -d "{\"command\":\"run 10\"}"
+```
+
+Batch example:
+
+```bash
+curl -X POST "http://127.0.0.1:8000/api/legacy/command" ^
+  -H "Content-Type: application/json" ^
+  -d "{\"commands\":[\"state\",\"spawn worker balance=5\",\"run 3\"]}"
+```
+
+Current shimmed commands:
+
+- `state`
+- `step`
+- `run <n>` (clamped to 500)
+- `spawn <type> [entity_id=...] [balance=...]`
+- `spawn types`
+- `print current time`
+- `print persona schedule <persona_id>`
+- `print all persona schedule`
+- `print persona current tile <persona_id>`
+- `print tile event <x>, <y>`
+
+Read-only legacy helper endpoints:
+
+- `GET /api/legacy/time`
+- `GET /api/legacy/persona/{persona_id}/schedule`
+- `GET /api/legacy/persona/schedules`
+- `GET /api/legacy/persona/{persona_id}/tile`
+- `GET /api/legacy/tile/events?x=<tile_x>&y=<tile_y>&limit=80`
+
+See [`docs/migration-command-map.md`](docs/migration-command-map.md) for the full old->new mapping and planned command coverage.
 
 ## Smallville-First Mode (Recommended Build Order)
 

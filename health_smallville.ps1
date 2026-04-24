@@ -3,6 +3,8 @@ $ErrorActionPreference = 'Stop'
 $backend = 'http://127.0.0.1:8000'
 $frontend = 'http://127.0.0.1:8010'
 $bridgeEndpoint = "$backend/api/bridge/smallville"
+$manifestEndpoint = "$backend/api/bridge/manifest"
+$expectedBridgeRev = 'ae-smallville-lifetime-v2'
 
 function Test-Url([string]$Url) {
   try {
@@ -30,19 +32,63 @@ Write-Host "Checking endpoints..."
 
 $stateOk = Test-Url "$backend/api/state"
 $bridgeOk = Test-Url $bridgeEndpoint
+$manifestOk = Test-Url $manifestEndpoint
 $frontOk = Test-Url "$frontend/demo/bridge_smallville/0/2/"
 
 Write-Host ("- Backend state:      " + ($(if ($stateOk) {'OK'} else {'FAIL'})))
+Write-Host ("- Bridge manifest:    " + ($(if ($manifestOk) {'OK'} else {'FAIL'})))
 Write-Host ("- Bridge endpoint:    " + ($(if ($bridgeOk) {'OK'} else {'FAIL'})))
 Write-Host ("- Frontend route:     " + ($(if ($frontOk) {'OK'} else {'FAIL'})))
 
-if (-not ($stateOk -and $bridgeOk -and $frontOk)) {
+if (-not ($stateOk -and $bridgeOk -and $manifestOk -and $frontOk)) {
   throw "Endpoint health check failed."
+}
+
+try {
+  $mf = Invoke-RestMethod -Uri $manifestEndpoint -Method Get -TimeoutSec 8
+  if ([string]$mf.bridge_revision -ne $expectedBridgeRev) {
+    throw ("Wrong API on $backend — bridge_revision is '" + [string]$mf.bridge_revision + "', expected '$expectedBridgeRev'.")
+  }
+  Write-Host ("- Bridge code path:   " + [string]$mf.endpoints_py)
+} catch {
+  throw "Bridge manifest check failed: $_"
+}
+
+Write-Host "Checking Arc / settlement diagnostics..."
+try {
+  $diag = Invoke-RestMethod -Uri "$backend/api/tx/diagnostics" -Method Get -TimeoutSec 8
+  $strat = [string]$diag.settlement.strategy
+  $rm = [string]$diag.config.real_mode
+  $hasKey = [bool]$diag.config.has_circle_api_key
+  $hasEnt = [bool]$diag.config.has_entity_secret
+  $hasWa = [bool]$diag.config.has_wallet_address
+  $hasDst = [bool]$diag.config.has_destination_address
+  $realN = [int]$diag.diagnostics.real_tx_count
+  $simN = [int]$diag.diagnostics.simulated_tx_count
+  Write-Host ("  SETTLEMENT_STRATEGY: " + $strat)
+  Write-Host ("  TX_REAL_MODE:        " + $rm)
+  Write-Host ("  Circle env complete: " + ($(if ($hasKey -and $hasEnt -and $hasWa -and $hasDst) {'YES'} else {'NO'})))
+  Write-Host ("  Real / sim tx count: " + $realN + " / " + $simN)
+  if ($strat -eq 'off' -or $rm -eq 'off') {
+    Write-Host "  (Arc settlement disabled or sim-only — use .env or omit -SimOnly on start script.)"
+  }
+} catch {
+  Write-Host "  WARN: could not read /api/tx/diagnostics: $_"
 }
 
 Write-Host "Checking movement signal..."
 
 $snap1 = Get-BridgeSnapshot
+if (-not [string]$snap1.world.bridge_revision) {
+  throw "Bridge JSON missing world.bridge_revision — port $backend is not running this repo's FastAPI (restart backend from AgenticEconomy/backend)."
+}
+if ([string]$snap1.world.bridge_revision -ne $expectedBridgeRev) {
+  throw ("Bridge revision mismatch on smallville payload: '" + [string]$snap1.world.bridge_revision + "'")
+}
+$w1 = $snap1.actors | Where-Object { $_.id -eq 'worker_1' } | Select-Object -First 1
+if (-not $w1 -or ($null -eq $w1.PSObject.Properties['lifetime_collected'])) {
+  throw "Bridge actors missing lifetime_collected — stale FastAPI build on $backend."
+}
 $tick1 = [int]($snap1.world.tick)
 $actors1 = @{}
 foreach ($a in ($snap1.actors | Where-Object { $_.id })) {

@@ -32,6 +32,19 @@ export async function getEvents() {
   return parseResponse(res);
 }
 
+export async function getTxDiagnostics() {
+  const res = await fetch(`${API_BASE}/tx/diagnostics`);
+  return parseResponse(res);
+}
+
+/** Small USDC transfer via Circle dev wallets — proves Arc path (uses test amount). */
+export async function probeArcTransaction(amount = 0.001) {
+  const q = new URLSearchParams();
+  q.set("amount", String(amount));
+  const res = await fetch(`${API_BASE}/tx/probe?${q.toString()}`, { method: "POST" });
+  return parseResponse(res);
+}
+
 export async function getActionLogs(limit = 200, afterSeq = null) {
   const query = new URLSearchParams();
   query.set("limit", String(limit));
@@ -81,5 +94,25 @@ export async function updateBehaviorSettings(settings) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(settings),
   });
+  return parseResponse(res);
+}
+
+// Final demo pass: surface the already-built economy + action layer to the UI.
+
+/** Live economy health + invariants. See /api/economy/health. */
+export async function getEconomyHealth() {
+  const res = await fetch(`${API_BASE}/economy/health`);
+  return parseResponse(res);
+}
+
+/** Compact { entity_id: human_action_label } map. See /api/agents/current. */
+export async function getAgentsCurrent() {
+  const res = await fetch(`${API_BASE}/agents/current`);
+  return parseResponse(res);
+}
+
+/** Total ledger-moving transactions count. See /api/transactions/count. */
+export async function getTransactionsCount() {
+  const res = await fetch(`${API_BASE}/transactions/count`);
   return parseResponse(res);
 }

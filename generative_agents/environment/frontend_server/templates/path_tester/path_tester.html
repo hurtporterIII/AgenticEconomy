@@ -2,15 +2,14 @@
 {% load staticfiles %}
 
 {% block content %}
+<div style="position:fixed;top:22px;right:4px;z-index:999999;font:11px monospace;background:#e1bee7;padding:2px 8px;border:1px solid #333;">TEST_PATH</div>
 <br>
 <br>
 <div>
 	<div id="game-container" style="text-align: center"></div>
 </div>
 
-  
-<!-- partial -->
-<script src='https://cdn.jsdelivr.net/npm/phaser@3.55.2/dist/phaser.js'></script>
+<!-- partial: Phaser is loaded from base.html head -->
 {% include 'path_tester/main_script.html' %}
 {% endblock content %}
 

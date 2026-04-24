@@ -1,6 +1,34 @@
+"""
+Banker agent.
+
+Spatial behavior (roam / snap-to-desk when a customer is in B12) is driven
+from backend/core/loop.py and is NOT affected by the feature flag below.
+This file implements the banker's *economic* policy actions.
+
+FEATURE FLAGS
+    Balance-mutating actions (collect_fees / anti_hoard_levy /
+    redistribute) are gated by core.flags.banker_economics_enabled(),
+    which itself is False unless BOTH:
+        - NON_WORKER_ECONOMICS=on  (master flag)
+        - BANKER_ECONOMIC_ACTIONS=on  (per-agent override)
+
+    When disabled, the banker still tracks its policy state and emits
+    a `banker_economy_disabled` audit event on the skipped tick. No
+    balances move, no bank_fee_cycle / bank_anti_hoard_levy /
+    bank_redistribution events are produced.
+
+    This exists because the nano-purchasing worker loop
+    (EARN == DEPOSIT + HOME, 0.0001 == 0.00001 + 0.00009) requires the
+    worker's liquid balance to survive between bank and home. Any
+    autonomous skim breaks the invariant and the stash never fires.
+"""
+
+from core.flags import banker_economics_enabled
+
+
 def handle_bank(bank, state):
     """
-    Bank management logic
+    Bank management logic.
     """
     from bank.bank import credit, debit
     from utils.helpers import choose_action, reinforce_action
@@ -36,8 +64,29 @@ def handle_bank(bank, state):
     }
     action, action_weights = choose_action(bank, action_utilities, state=state, role="banker")
 
+    # ------------------------------------------------------------------
+    # FEATURE FLAG: when banker economic actions are disabled, short-circuit
+    # any action that would mutate balances. The banker still gets a
+    # single informational event per tick so downstream systems see it
+    # "doing something" — but nothing moves.
+    # ------------------------------------------------------------------
+    economic_action_selected = action in {"collect_fees", "anti_hoard_levy", "redistribute"}
+    if economic_action_selected and not banker_economics_enabled():
+        state.setdefault("events", []).append(
+            {
+                "type": "banker_economy_disabled",
+                "bank_id": bank["id"],
+                "suppressed_action": action,
+                "action_weights": action_weights,
+                "regime": regime,
+                "network": "Arc",
+                "asset": "USDC",
+            }
+        )
+        return
+
     # Bankers tune systemic behavior by selecting one dominant policy action per tick.
-    if action == "collect_fees":
+    if action == "collect_fees" and banker_economics_enabled():
         fee_rate = round((0.0003 + strictness * 0.0012) * bank_fee_multiplier, 6)
         fee_collected = 0.0
         fee_steps = []
@@ -78,7 +127,7 @@ def handle_bank(bank, state):
             return
         reinforce_action(bank, "collect_fees", -0.1, state=state, role="banker", context={"regime": regime})
 
-    if action == "anti_hoard_levy" and wealthy_ids:
+    if action == "anti_hoard_levy" and wealthy_ids and banker_economics_enabled():
         levy_steps = []
         levy_total = 0.0
         for entity_id in wealthy_ids:
@@ -117,7 +166,12 @@ def handle_bank(bank, state):
             return
         reinforce_action(bank, "anti_hoard_levy", -0.1, state=state, role="banker", context={"regime": regime})
 
-    if action == "redistribute" and low_balance_ids and balances[bank["id"]] > 0:
+    if (
+        action == "redistribute"
+        and low_balance_ids
+        and balances[bank["id"]] > 0
+        and banker_economics_enabled()
+    ):
         support_steps = []
         support_total = 0.0
         max_per_agent = round(0.2 + generosity * 0.9, 6)
@@ -161,6 +215,8 @@ def handle_bank(bank, state):
             return
         reinforce_action(bank, "redistribute", -0.1, state=state, role="banker", context={"regime": regime})
 
+    # hold_reserve is the always-safe fallback. It never mutates balances,
+    # so it stays unconditional whether the feature flag is on or off.
     reinforce_action(
         bank,
         "hold_reserve",

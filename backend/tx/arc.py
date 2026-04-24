@@ -3,11 +3,18 @@ import re
 import time
 import uuid
 import json
+from pathlib import Path
 
 from dotenv import load_dotenv
 from core.state import state as shared_state
 
-load_dotenv(override=True)
+_repo_root = Path(__file__).resolve().parents[2]
+_env_file = _repo_root / ".env"
+if _env_file.is_file():
+    load_dotenv(_env_file, override=True)
+if os.getenv("AGENTIC_SIM_ONLY", "").strip().lower() in {"1", "true", "yes", "on"}:
+    os.environ["TX_REAL_MODE"] = "off"
+    os.environ["SETTLEMENT_STRATEGY"] = "off"
 
 ARC_TESTNET_USDC = "0x3600000000000000000000000000000000000000"
 TERMINAL_STATES = {"COMPLETE", "FAILED", "CANCELLED", "DENIED"}
@@ -591,6 +598,8 @@ def execute_settlement_cycle(shared, tick):
         settlement_records.append(
             {
                 "intent_id": intent.get("intent_id"),
+                "from_wallet": intent.get("from_wallet"),
+                "to_wallet": intent.get("to_wallet"),
                 "tx_hash": tx_hash,
                 "amount_submitted": amount_to_submit,
                 "is_real": is_real,

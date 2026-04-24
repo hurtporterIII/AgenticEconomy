@@ -56,6 +56,9 @@ export function initControls(root, handlers) {
         <button id="sound-btn" title="Toggle ambient and event sound effects.">Sound Off</button>
         <button id="viewer-btn" title="Viewer-only lighting mode. Does not affect agent logic.">Viewer: Night</button>
         <button id="export-btn" title="Download recent events and metrics as replay JSON.">Export Replay</button>
+        <button id="arc-probe-btn" title="Send a tiny probe USDC transfer on Arc (Circle dev wallets). Check explorer for the returned hash.">
+          Test Arc Transfer
+        </button>
       </div>
       <div id="status">Ready.</div>
     </div>
@@ -107,6 +110,7 @@ export function initControls(root, handlers) {
   const soundBtn = root.querySelector("#sound-btn");
   const viewerBtn = root.querySelector("#viewer-btn");
   const exportBtn = root.querySelector("#export-btn");
+  const arcProbeBtn = root.querySelector("#arc-probe-btn");
   const status = root.querySelector("#status");
   const behaviorRole = root.querySelector("#behavior-role");
   const traitA = root.querySelector("#trait-a");
@@ -230,6 +234,28 @@ export function initControls(root, handlers) {
     autoBtn.textContent = autoMode ? "Stop Auto" : "Start Auto";
     handlers.onAutoToggle(autoMode, Math.max(250, Number(tickRate.value || 1500)));
     setStatus(autoMode ? "Auto mode running." : "Auto mode stopped.", autoMode ? "warn" : "ok");
+  });
+
+  arcProbeBtn.addEventListener("click", async () => {
+    if (!handlers.onArcProbe) return;
+    try {
+      arcProbeBtn.disabled = true;
+      setStatus("Probing Arc (USDC)…", "warn");
+      const res = await handlers.onArcProbe();
+      const hash = res && res.tx_hash != null ? String(res.tx_hash) : "";
+      const real = Boolean(res && res.is_real_hash);
+      if (real && hash.startsWith("0x")) {
+        setStatus(`Arc probe: REAL tx ${hash.slice(0, 18)}…`, "ok");
+      } else if (hash) {
+        setStatus(`Arc probe: no on-chain hash (sim / fallback): ${hash.slice(0, 48)}`, "warn");
+      } else {
+        setStatus("Arc probe: empty response — check backend logs.", "bad");
+      }
+    } catch (error) {
+      setStatus(`Arc probe failed: ${error.message}`, "bad");
+    } finally {
+      arcProbeBtn.disabled = false;
+    }
   });
 
   syncBtn.addEventListener("click", async () => {

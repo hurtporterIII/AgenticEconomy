@@ -1,5 +1,22 @@
-from fastapi import FastAPI
+"""Repo-root .env before imports that read os.environ (e.g. tx.arc)."""
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+_repo_root = Path(__file__).resolve().parent.parent
+_env_file = _repo_root / ".env"
+if _env_file.is_file():
+    # File wins over inherited shell so `.env` stays authoritative (avoids empty/stale env breaking Circle).
+    load_dotenv(_env_file, override=True)
+
 import os
+
+# After `.env`: launcher can force motion-only demo without editing the file.
+if os.getenv("AGENTIC_SIM_ONLY", "").strip().lower() in {"1", "true", "yes", "on"}:
+    os.environ["TX_REAL_MODE"] = "off"
+    os.environ["SETTLEMENT_STRATEGY"] = "off"
+
+from fastapi import FastAPI
 import threading
 import time
 
@@ -10,11 +27,19 @@ from core.state import default_behavior_settings, default_economy_state, state
 
 def create_app():
     """Create minimal HTTP app for demo endpoints."""
+    # PASS 3: fail-loud if the Tiled map is missing a POI the action-queue
+    # executor depends on. We validate at app-construction time so the
+    # process refuses to start rather than silently running with movement
+    # targets falling back to (0, 0) or last-known entity positions.
+    from core.action_queue import validate_required_pois
+    validate_required_pois()
+
     app = FastAPI(title="AgenticEconomy Demo API")
     app.include_router(router)
 
     auto_tick_enabled = os.getenv("AUTO_TICK_ENABLED", "1") == "1"
-    auto_tick_ms = max(50, int(os.getenv("AUTO_TICK_MS", "250")))
+    # ~10 Hz default: smoother bridge motion than 250ms when the UI only polls (no step-on-poll).
+    auto_tick_ms = max(50, int(os.getenv("AUTO_TICK_MS", "100")))
     stop_event = threading.Event()
 
     def _auto_tick_loop():

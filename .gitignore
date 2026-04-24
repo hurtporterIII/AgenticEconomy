@@ -61,6 +61,10 @@ copilot-messages.log
 # Frontend build output
 frontend/dist/
 
+# Local action log (unbounded JSONL — never push to GitHub)
+backend/store/actions.jsonl
+backend/store/_tail_actions.jsonl
+
 # Scratch / local experiment outputs
 *.tmp
 _space_test.tmp
@@ -92,3 +96,8 @@ Hackathon*.docx.meta.json
 
 # Cursor / local project metadata
 .project/
+.cursor/
+
+# Tooling sidecar files (local navigation metadata — not source of truth)
+**/*.meta.json
+_bridge.json

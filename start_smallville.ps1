@@ -1,4 +1,9 @@
-﻿$ErrorActionPreference = 'Stop'
+﻿param(
+  # Zero-keys demo: forces simulated settlement (same as previous script behavior).
+  [switch]$SimOnly
+)
+
+$ErrorActionPreference = 'Stop'
 
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $backendDir = Join-Path $root 'backend'
@@ -105,7 +110,14 @@ if ($forceRestart -and (Test-PortListening $backendPort)) {
 }
 
 if (-not (Test-PortListening $backendPort)) {
-  $backendCmd = "`$env:TX_REAL_MODE='off'; `$env:SETTLEMENT_STRATEGY='off'; `$env:CIRCLE_POLL_ATTEMPTS='1'; `$env:FORCE_SINGLE_TARGET='0'; & `"$backendPythonExe`" -m uvicorn main:app --host 127.0.0.1 --port $backendPort"
+  if ($SimOnly) {
+    # Sim-only: clamp after `.env` load in Python (see AGENTIC_SIM_ONLY in main.py / arc.py).
+    $backendCmd = "`$env:AGENTIC_SIM_ONLY='1'; `$env:CIRCLE_POLL_ATTEMPTS='1'; `$env:FORCE_SINGLE_TARGET='0'; `$env:AUTO_TICK_ENABLED='1'; `$env:AUTO_TICK_MS='100'; & `"$backendPythonExe`" -m uvicorn main:app --host 127.0.0.1 --port $backendPort"
+  } else {
+    # Respect `.env` / user environment for Arc (TX_REAL_MODE, SETTLEMENT_STRATEGY, Circle keys).
+    # AUTO_TICK_*: background sim loop in main.py — keep Django from also stepping every poll (see SMALLVILLE_BRIDGE_STEP_ON_POLL below).
+    $backendCmd = "`$env:AUTO_TICK_ENABLED='1'; `$env:AUTO_TICK_MS='100'; & `"$backendPythonExe`" -m uvicorn main:app --host 127.0.0.1 --port $backendPort"
+  }
   Start-Process powershell -WorkingDirectory $backendDir -ArgumentList '-NoExit','-Command',$backendCmd | Out-Null
   Start-Sleep -Seconds 2
 }
@@ -114,49 +126,60 @@ if (-not (Wait-Http "http://127.0.0.1:$backendPort/api/state" 90)) {
   throw "Backend API did not come up on port $backendPort"
 }
 
-# 2) Seed agents if empty
+# 1b) Prove this port is *this* repo’s FastAPI (not another app that also exposes /api/state).
+$expectedRev = 'ae-smallville-lifetime-v2'
+try {
+  $mf = Invoke-RestMethod -Uri "http://127.0.0.1:$backendPort/api/bridge/manifest" -Method Get -TimeoutSec 6
+  $rev = [string]$mf.bridge_revision
+  if ($rev -ne $expectedRev) {
+    throw "Bridge manifest revision mismatch: got '$rev', expected '$expectedRev'."
+  }
+} catch {
+  throw ("Port $backendPort is listening but is not the AgenticEconomy bridge from this repo " +
+    "(GET /api/bridge/manifest failed or wrong revision). Stop whatever owns the port, then re-run this script. Details: $_")
+}
+
+# 2) Enforce stable demo population (prevents economy collapse from over-spawn)
 try {
   $state = Invoke-RestMethod -Uri "http://127.0.0.1:$backendPort/api/state" -Method Get -TimeoutSec 5
   $entityCount = 0
-  if ($state -and $state.entities) {
-    $entityCount = $state.entities.PSObject.Properties.Count
+  $roleCounts = @{
+    worker = 0
+    cop = 0
+    banker = 0
+    spy = 0
+    thief = 0
+    bank = 0
   }
 
-  if ($entityCount -lt 10) {
-    $spawnPlan = @(
-      @{t='worker'; n=12},
-      @{t='thief'; n=5},
-      @{t='cop'; n=3},
-      @{t='banker'; n=2},
-      @{t='bank'; n=1}
-    )
-    foreach ($plan in $spawnPlan) {
-      for ($i = 0; $i -lt $plan.n; $i++) {
-        try {
-          Invoke-RestMethod -Uri "http://127.0.0.1:$backendPort/api/spawn?entity_type=$($plan.t)&balance=5" -Method Post -TimeoutSec 4 | Out-Null
-        } catch {}
-      }
+  if ($state -and $state.entities) {
+    $entities = @($state.entities.PSObject.Properties.Value)
+    $entityCount = $entities.Count
+    foreach ($e in $entities) {
+      if (-not $e) { continue }
+      $rawRole = [string]$e.persona_role
+      $rawType = [string]$e.type
+      $role = if ($rawRole -and $rawRole.Trim() -ne '') { $rawRole.ToLower() } else { $rawType.ToLower() }
+      if ($roleCounts.ContainsKey($role)) { $roleCounts[$role] = [int]$roleCounts[$role] + 1 }
     }
   }
 
-  # Ensure one spy exists in demo population (banker subtype with role=spy).
-  try {
-    $spyPayload = @{
-      workers = 0
-      cops = 0
-      bankers = 0
-      spies = 1
-      thieves = 0
-      banks = 0
-      clear_existing = $false
-      start_balance = 5
-    } | ConvertTo-Json -Depth 3
-    Invoke-RestMethod -Uri "http://127.0.0.1:$backendPort/api/population/set" `
+  $needsReset = (
+    ($entityCount -ne 10) -or
+    ($roleCounts.worker -ne 6) -or
+    ($roleCounts.cop -ne 1) -or
+    ($roleCounts.banker -ne 1) -or
+    ($roleCounts.spy -ne 1) -or
+    ($roleCounts.thief -ne 1) -or
+    ($roleCounts.bank -ne 0)
+  )
+
+  if ($needsReset) {
+    Invoke-RestMethod -Uri "http://127.0.0.1:$backendPort/api/demo/reset-economy" `
       -Method Post `
-      -ContentType "application/json" `
-      -Body $spyPayload `
       -TimeoutSec 8 | Out-Null
-  } catch {}
+    Write-Host "Population normalized to 6 workers, 1 cop, 1 banker, 1 spy, 1 thief."
+  }
 } catch {}
 
 # 2.5) Default to role-hub mode (route disabled unless explicitly enabled)
@@ -193,7 +216,8 @@ if ($forceRestart -and (Test-PortListening $frontendPort)) {
 }
 
 if (-not (Test-PortListening $frontendPort)) {
-  $frontendCmd = "`$env:SMALLVILLE_MODE='bridge'; `$env:SMALLVILLE_BRIDGE_URL='http://127.0.0.1:$backendPort/api/bridge/smallville'; `$env:SMALLVILLE_BRIDGE_STEP_ON_POLL='1'; & `"$frontendPythonExe`" manage.py runserver 127.0.0.1:$frontendPort"
+  # STEP_ON_POLL=0: FastAPI already advances the world on AUTO_TICK_MS; stepping again on every browser poll causes jerky motion and double-speed sim.
+  $frontendCmd = "`$env:SMALLVILLE_MODE='bridge'; `$env:SMALLVILLE_BRIDGE_URL='http://127.0.0.1:$backendPort/api/bridge/smallville'; `$env:SMALLVILLE_BRIDGE_STEP_ON_POLL='0'; & `"$frontendPythonExe`" manage.py runserver 127.0.0.1:$frontendPort"
   Start-Process powershell -WorkingDirectory $gaFrontendDir -ArgumentList '-NoExit','-Command',$frontendCmd | Out-Null
   Start-Sleep -Seconds 2
 }

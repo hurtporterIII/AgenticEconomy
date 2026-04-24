@@ -1,13 +1,31 @@
 from actions.service import call_service
 from bank.bank import debit
+from core.flags import cop_economics_enabled
+from core.flags import NANO_ECONOMY_HOOKS
 from utils.helpers import choose_action, reinforce_action
 
 
 def handle_cop(cop, state):
     """
-    Executes cop behavior
+    Executes cop behavior.
+
+    FEATURE FLAG
+        The only balance-mutating thing a cop does is debit the thief
+        when a chase succeeds (a "penalty"). That debit is gated by
+        core.flags.cop_economics_enabled(). When the master flag
+        NON_WORKER_ECONOMICS is off, the cop still chases and still
+        captures (cop["target"] clears on success), but no penalty is
+        applied and the event carries `penalty: 0` / `tx_hash: None`.
+        All scan / patrol / chase decision logic is unaffected.
     """
     import random
+
+    # Info-driven mode: cop behavior should be produced by spy intel and the
+    # action queue (cop_recover events), not by legacy random chase/service.
+    if NANO_ECONOMY_HOOKS:
+        cop.setdefault("top_action", "standby_intel")
+        cop["target"] = None
+        return
 
     personality = cop.setdefault("personality", {})
     api_reliance = float(personality.get("api_reliance", 0.65))
@@ -135,9 +153,27 @@ def handle_cop(cop, state):
     chase_success = random.random() < chase_success_prob
     penalty = round(0.5 + persistence * 1.5, 6)
     penalty_tx = None
+    econ_suppressed = False
     if chase_success:
-        penalty_tx = debit(target_id, penalty, None)
+        if cop_economics_enabled():
+            penalty_tx = debit(target_id, penalty, None)
+        else:
+            # Capture still happens spatially, but no balance moves.
+            econ_suppressed = True
+            penalty = 0
         cop["target"] = None
+    if econ_suppressed:
+        state.setdefault("events", []).append(
+            {
+                "type": "cop_disabled",
+                "cop_id": cop.get("id"),
+                "suppressed_action": "penalty_debit",
+                "target_id": target_id,
+                "regime": regime,
+                "network": "Arc",
+                "asset": "USDC",
+            }
+        )
     reinforce_action(
         cop,
         "chase",

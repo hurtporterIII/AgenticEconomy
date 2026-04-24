@@ -11,22 +11,25 @@ WORLD_MAX_X = 4464.0
 WORLD_MIN_Y = 16.0
 WORLD_MAX_Y = 3184.0
 MOVE_LERP = 0.18
+# Server is now the single movement authority. Entities walk along an A*
+# path computed against the same Collisions layer the Phaser tilemap uses,
+# one fixed step per tick. The client is expected to render the sprite at
+# the server's x/y (no client-side pathfinding).
+MOVE_STEP_PX = 18.0  # per-tick pixel advance along the walkable path
+MOVE_ARRIVAL_EPS = 2.0  # consider a waypoint reached within this many pixels
+PATH_REPLAN_EVERY_TICKS = 45  # periodically refresh A* even if target unchanged
+UNSTICK_EMPTY_PATH_TICKS = 12  # deterministic recovery window before snap
 FORCE_SINGLE_TARGET = False
 SINGLE_TARGET_BUILDING_ID = os.getenv("SINGLE_TARGET_BUILDING_ID", "B08").strip().upper()
 SINGLE_TARGET_POINT = "center"
-GLOBAL_ROUTE_MODE = os.getenv("GLOBAL_ROUTE_MODE", "0") == "1"
 DEFAULT_GLOBAL_ROUTE_IDS = (
     {"id": "B11", "anchor": "center"},
     {"id": "B08", "anchor": "center"},
 )
-ROLE_HUB_DEFAULTS = {
-    "worker_home": "B08",
-    "worker_work": "B11",
-    "thief_home": "B07",
-    "cop_home": "B09",
-    "bank_home": "B12",
-    "spy_home": "B06",
-}
+# Derived from the single registry — see core/locations.py ROLE_PLACES.
+# Do NOT hardcode role->building mappings anywhere else.
+from core import locations as _locations
+ROLE_HUB_DEFAULTS = _locations.flat_hub_defaults()
 BUILDING_CATALOG_PATH = Path(__file__).resolve().parents[1] / "store" / "building_catalog.json"
 _BUILDING_CATALOG_CACHE = None
 _BUILDING_POINT_CACHE = {}
@@ -166,14 +169,39 @@ def _pick_patrol_point_in_bbox(entity, bbox, tick, hold_ticks=16, anchor=None, a
     return nx, ny
 
 
+def _next_patrol_point_in_bbox(entity, bbox):
+    """Deterministic patrol waypoint sequence (no randomness).
+
+    Used for cop fallback movement so the sprite visibly walks a route instead
+    of jittering in place."""
+    min_x, min_y, max_x, max_y = bbox
+    pad = 24.0
+    points = [
+        (min_x + pad, min_y + pad),
+        (max_x - pad, min_y + pad),
+        (max_x - pad, max_y - pad),
+        (min_x + pad, max_y - pad),
+        ((min_x + max_x) / 2.0, (min_y + max_y) / 2.0),
+    ]
+    idx = int(entity.get("_patrol_idx", 0) or 0)
+    entity["_patrol_idx"] = idx + 1
+    px, py = points[idx % len(points)]
+    return _clamp_to_bbox(px, py, bbox)
+
+
 # Canonical geolocated anchors (all from building catalog, not hardcoded map guesses).
 # Center points align with visible building-name anchors.
-WORK_ZONE = _get_building_point("B11", "center", default=(2704.0, 1712.0))  # money/work
-WORKER_HOME_ZONE = _get_building_point("B08", "center", default=(912.0, 1168.0))  # home/store
-THIEF_ZONE = _get_building_point("B07", "center", default=(1840.0, 880.0))
-COP_ZONE = _get_building_point("B09", "center", default=(3728.0, 1168.0))
-BANKER_ZONE = _get_building_point("B11", "center", default=(2704.0, 1712.0))
-BANK_ZONE = _get_building_point("B11", "center", default=(2704.0, 1712.0))
+# All place coordinates come from core/locations.py (the single registry).
+# These module-level constants always resolve to the "entry" anchor (the
+# door), which is what agents should actually navigate to. If you need
+# center/inside, call locations.point(..., anchor="...") explicitly instead
+# of adding new constants.
+WORK_ZONE        = _locations.point("worker", "work")   # B11 entry
+WORKER_HOME_ZONE = _locations.point("worker", "home")   # B08 entry
+THIEF_ZONE       = _locations.point("thief",  "home")   # B07 entry
+COP_ZONE         = _locations.point("cop",    "home")   # B09 entry
+BANKER_ZONE      = _locations.point("banker", "home")   # B12 entry
+BANK_ZONE        = _locations.point("bank",   "home")   # B12 entry
 
 
 def _stable_lane_offset(entity_id, max_abs=18.0):
@@ -216,7 +244,8 @@ def _get_global_route_stops(route_sequence):
 def _ensure_global_route_state(shared):
     movement = shared.setdefault("movement", {})
     route = movement.setdefault("global_route", {})
-    route.setdefault("enabled", GLOBAL_ROUTE_MODE)
+    # Off unless explicitly enabled (API or saved state); avoids parade mode hijacking workers.
+    route.setdefault("enabled", False)
     route.setdefault("phase", 0)
     route.setdefault("stage", "entry")  # entry -> inside -> next phase
     route.setdefault("stage_started_tick", 0)
@@ -272,7 +301,7 @@ def _apply_global_route_targets(shared):
     if not entities:
         return False
     movement, route = _ensure_global_route_state(shared)
-    if not bool(route.get("enabled", GLOBAL_ROUTE_MODE)):
+    if not bool(route.get("enabled", False)):
         return False
 
     raw_sequence = route.get("sequence", list(DEFAULT_GLOBAL_ROUTE_IDS))
@@ -334,6 +363,9 @@ def _apply_global_route_targets(shared):
             else:
                 manual_target.pop("arrived_tick", None)
                 entity["manual_target"] = manual_target
+            continue
+        # Workers follow shift / role hubs — never the global parade target.
+        if str(entity.get("type", "") or "").lower() == "worker":
             continue
         total += 1
         slot_target = _route_slot_target(base_target, entity_id, stage)
@@ -400,22 +432,15 @@ def _hub_point(shared, hub_key, anchor="inside", default=(912.0, 1168.0)):
 
 
 def _home_zone(shared, entity):
+    """Return the 'home' point for an entity. One lookup, no fallbacks: the
+    role -> place mapping lives in core/locations.py."""
     entity_type = str(entity.get("type", "")).lower()
     role = str(entity.get("persona_role", entity_type)).lower()
-
-    if entity_type == "worker":
-        return _hub_point(shared, "worker_home", "inside", default=WORKER_HOME_ZONE)
-    if entity_type == "thief":
-        return _hub_point(shared, "thief_home", "inside", default=THIEF_ZONE)
-    if entity_type == "cop":
-        return _hub_point(shared, "cop_home", "inside", default=COP_ZONE)
-    if role == "spy":
-        return _hub_point(shared, "spy_home", "inside", default=BANKER_ZONE)
-    if entity_type == "banker":
-        return _hub_point(shared, "bank_home", "inside", default=BANKER_ZONE)
-    if entity_type == "bank":
-        return _hub_point(shared, "bank_home", "inside", default=BANK_ZONE)
-    return _clamp_world(WORKER_HOME_ZONE[0], WORKER_HOME_ZONE[1])
+    lookup_role = "spy" if role == "spy" else entity_type
+    if lookup_role not in _locations.ROLE_PLACES:
+        lookup_role = "worker"  # last-resort fallback; see locations.ROLE_PLACES
+    x, y = _locations.point(lookup_role, "home")
+    return _clamp_world(x, y)
 
 
 def _near(entity, target, radius):
@@ -443,6 +468,7 @@ def _set_behavior_target(entity, entities, shared):
     entity_role = str(entity.get("persona_role", entity_type)).lower()
     top_action = str(entity.get("top_action") or "").lower()
     target_id = entity.get("target")
+    tick = int(shared.setdefault("economy", {}).get("tick", 0) or 0)
 
     # Demo override: force all agents to meet at one shared target point.
     if FORCE_SINGLE_TARGET:
@@ -454,41 +480,62 @@ def _set_behavior_target(entity, entities, shared):
         )
         return
 
+    # PASS 2: if the entity has queued actions, the queue wins over the
+    # default FSM / roaming logic. Workers are deliberately excluded so
+    # the nano-economy worker FSM remains the sole authority for
+    # worker movement (per the hard rule set by the user).
+    if entity_type != "worker":
+        from core.action_queue import consume_action_queue
+        tick = int(shared.setdefault("economy", {}).get("tick", 0) or 0)
+        if consume_action_queue(entity, shared, tick):
+            return
+
     if entity_type == "worker":
-        route = str(entity.get("work_route", "to_mine"))
-        haul_mode = str(entity.get("haul_mode", ""))
+        shift = str(entity.get("worker_shift_phase", "to_mine")).strip() or "to_mine"
+        # One registry decides anchors (see core/locations.py DEFAULT_ANCHOR).
+        # Home defaults to "inside" so workers actually walk into the house,
+        # not stop at the doorway tile. Work and bank default to "entry".
+        work_pt = _locations.point("worker", "work")
+        home_pt = _locations.point("worker", "home")
+        bank_pt = _locations.point("worker", "bank")
 
-        # After mining, workers must physically return home before next run.
-        if haul_mode == "return_home":
-            route = "to_home"
-        elif route not in {"to_mine", "to_home"}:
-            route = "to_mine"
+        # Lock the jittered target for the duration of each phase. Re-rolling
+        # the random jitter every tick was causing target_x/target_y to jump
+        # up to ~64px/tick, which forced A* to repath constantly and
+        # produced the visible "pacing back and forth" behavior.
+        last_shift = str(entity.get("_shift_locked") or "")
+        need_new = (last_shift != shift) or ("target_x" not in entity) or ("target_y" not in entity)
+        if need_new:
+            # Deterministic FSM: target MUST match the arrival check in
+            # agents/worker.py exactly. No jitter, no randomness — the
+            # worker has to land on the same pixel the FSM is testing.
+            from core.pois import try_poi
 
-        worker_work_zone = _hub_point(shared, "worker_work", "inside", default=WORK_ZONE)
-        worker_home_zone = _home_zone(shared, entity)
-
-        if route == "to_mine":
-            entity["target_x"], entity["target_y"] = _clamp_world(
-                worker_work_zone[0] + random.uniform(-65, 65),
-                worker_work_zone[1] + random.uniform(-45, 45),
-            )
-            entity["work_route"] = "to_mine"
-            if _near(entity, worker_work_zone, 90):
-                entity["at_mine"] = True
+            if shift == "to_bank":
+                poi = try_poi("bank_customer_spot")
+                anchor = poi if poi is not None else bank_pt
+            elif shift == "to_home":
+                poi = try_poi("worker_home_inside")
+                anchor = poi if poi is not None else home_pt
             else:
-                entity["at_mine"] = False
-            return
+                anchor = work_pt
 
-        entity["target_x"], entity["target_y"] = _clamp_world(
-            worker_home_zone[0] + random.uniform(-70, 70),
-            worker_home_zone[1] + random.uniform(-50, 50),
-        )
-        entity["work_route"] = "to_home"
-        entity["at_mine"] = False
-        if _near(entity, worker_home_zone, 95):
-            entity["haul_mode"] = ""
-            entity["work_route"] = "to_mine"
+            tx, ty = _clamp_world(anchor[0], anchor[1])
+            entity["target_x"] = tx
+            entity["target_y"] = ty
+            entity["_shift_locked"] = shift
+
+        if shift == "to_bank":
+            entity["work_route"] = "to_bank"
+            entity["at_mine"] = False
             return
+        if shift == "to_home":
+            entity["work_route"] = "to_home"
+            entity["at_mine"] = False
+            return
+        entity["work_route"] = "to_mine"
+        entity["at_mine"] = bool(_near(entity, work_pt, 96))
+        return
 
     if entity_type == "thief":
         thief_zone = _home_zone(shared, entity)
@@ -499,11 +546,32 @@ def _set_behavior_target(entity, entities, shared):
         return
 
     if entity_type == "cop":
-        cop_zone = _home_zone(shared, entity)
-        entity["target_x"], entity["target_y"] = _clamp_world(
-            cop_zone[0] + random.uniform(-90, 90),
-            cop_zone[1] + random.uniform(-60, 60),
-        )
+        # Deterministic city patrol fallback when queue is empty:
+        # spy home -> thief home -> bank -> police station.
+        # This keeps cop movement readable and avoids "circling one spot".
+        patrol_points = [
+            _locations.point("spy", "home"),
+            _locations.point("thief", "home"),
+            _locations.point("bank", "home"),
+            _locations.point("cop", "home"),
+        ]
+        idx = int(entity.get("_cop_city_patrol_idx", 0) or 0)
+        hold_until = int(entity.get("_cop_patrol_hold_until_tick", -1) or -1)
+        px, py = patrol_points[idx % len(patrol_points)]
+        px, py = _clamp_world(px, py)
+
+        if tick < hold_until:
+            entity["target_x"], entity["target_y"] = px, py
+            return
+
+        if _near(entity, (px, py), 36.0):
+            entity["_cop_city_patrol_idx"] = idx + 1
+            entity["_cop_patrol_hold_until_tick"] = int(tick) + 16
+            npx, npy = patrol_points[(idx + 1) % len(patrol_points)]
+            entity["target_x"], entity["target_y"] = _clamp_world(npx, npy)
+            return
+
+        entity["target_x"], entity["target_y"] = px, py
         return
 
     if entity_type in {"bank", "banker"}:
@@ -518,21 +586,90 @@ def _set_behavior_target(entity, entities, shared):
 
         tick = int(shared.setdefault("economy", {}).get("tick", 0))
         hubs = _ensure_role_hubs(shared)
-        if entity_role == "spy":
-            home_hub_key = "spy_home"
-            default_home = _hub_point(shared, "spy_home", "center", default=BANKER_ZONE)
-            patrol_hold = 14
-        else:
+
+        # --- Banker: roam the bank until a customer walks in, then go
+        # to the desk and stay there until they leave. ---
+        # - No one in the bank bbox  → patrol (same wandering logic the
+        #   spy uses, confined to the bank's interior).
+        # - Someone else in the bbox → snap to the 'banker_desk' POI
+        #   (or bank center as a fallback) and hold there until the
+        #   customer leaves. Deliberately does NOT track the customer,
+        #   so it doesn't look like the banker is chasing them out.
+        if entity_role != "spy":
             home_hub_key = "bank_home"
             default_home = _hub_point(shared, "bank_home", "center", default=BANKER_ZONE)
-            patrol_hold = 18
+            home_bid = str(hubs.get(home_hub_key, ROLE_HUB_DEFAULTS.get(home_hub_key, ""))).strip().upper()
+            home_bbox = _get_building_bbox(home_bid, default_center=default_home, pad_px=18.0)
+
+            ex = float(entity.get("x", default_home[0]) or default_home[0])
+            ey = float(entity.get("y", default_home[1]) or default_home[1])
+            if not _point_in_bbox(ex, ey, home_bbox):
+                # Nudged out of the bank — recover back inside first.
+                entity["target_x"], entity["target_y"] = _clamp_to_bbox(
+                    default_home[0], default_home[1], home_bbox
+                )
+                return
+
+            # Is any non-banker currently inside the bank?
+            self_id = str(entity.get("id", ""))
+            customer_present = False
+            for other_id, other in entities.items():
+                if str(other_id) == self_id:
+                    continue
+                if str(other.get("type", "")).lower() in {"banker", "bank"}:
+                    continue
+                ox = float(other.get("x", 0.0) or 0.0)
+                oy = float(other.get("y", 0.0) or 0.0)
+                if _point_in_bbox(ox, oy, home_bbox):
+                    customer_present = True
+                    break
+
+            if customer_present:
+                # Prefer the 'banker_desk' POI when it's placed inside
+                # the bank. Otherwise fall back to the bank center so
+                # the banker still has a well-defined spot to stand.
+                desk_pt = default_home
+                try:
+                    from core.pois import try_poi
+                    poi = try_poi("banker_desk")
+                    if poi is not None and _point_in_bbox(poi[0], poi[1], home_bbox):
+                        desk_pt = (float(poi[0]), float(poi[1]))
+                except Exception:
+                    pass
+
+                entity["tracking_intruder"] = ""
+                entity["at_desk"] = True
+                entity["target_x"], entity["target_y"] = _clamp_to_bbox(
+                    desk_pt[0], desk_pt[1], home_bbox
+                )
+                return
+
+            # Empty bank -> roam.
+            entity["tracking_intruder"] = ""
+            entity["at_desk"] = False
+            px, py = _pick_patrol_point_in_bbox(
+                entity,
+                home_bbox,
+                tick,
+                hold_ticks=18,
+                anchor=default_home,
+                anchor_spread=86.0,
+            )
+            entity["target_x"], entity["target_y"] = _clamp_to_bbox(
+                px, py, home_bbox
+            )
+            return
+
+        # --- Spy: keep patrol + intruder tracking inside home bbox ---
+        home_hub_key = "spy_home"
+        default_home = _hub_point(shared, "spy_home", "center", default=BANKER_ZONE)
+        patrol_hold = 14
 
         home_bid = str(hubs.get(home_hub_key, ROLE_HUB_DEFAULTS.get(home_hub_key, ""))).strip().upper()
         home_bbox = _get_building_bbox(home_bid, default_center=default_home, pad_px=18.0)
         ex = float(entity.get("x", default_home[0]) or default_home[0])
         ey = float(entity.get("y", default_home[1]) or default_home[1])
         if not _point_in_bbox(ex, ey, home_bbox):
-            # If nudged out, immediately recover back inside home bounds.
             entity["target_x"], entity["target_y"] = _clamp_to_bbox(default_home[0], default_home[1], home_bbox)
             return
 
@@ -547,7 +684,6 @@ def _set_behavior_target(entity, entities, shared):
                 intruders.append(other)
 
         if intruders:
-            # Track nearest intruder while still constrained to home interior.
             intruders.sort(
                 key=lambda o: math.hypot(
                     float(o.get("x", ex) or ex) - ex,
@@ -581,14 +717,125 @@ def _set_behavior_target(entity, entities, shared):
     )
 
 
+def _path_needs_replan(entity: dict) -> bool:
+    """True if the entity's cached A* path is stale relative to its current
+    position or target. Cheap checks only — no pathfinding here."""
+    tx = float(entity.get("target_x", entity.get("x", 0.0)) or 0.0)
+    ty = float(entity.get("target_y", entity.get("y", 0.0)) or 0.0)
+    last_target = entity.get("_path_target")
+    waypoints = entity.get("_path") or []
+    if not last_target or not waypoints:
+        return True
+    if abs(float(last_target[0]) - tx) > 1.0 or abs(float(last_target[1]) - ty) > 1.0:
+        return True
+    age = int(entity.get("_path_age_ticks", 0) or 0)
+    return age >= PATH_REPLAN_EVERY_TICKS
+
+
+def _recompute_path(entity: dict) -> None:
+    """Run A* on the Collisions grid from the entity's current pixel to its
+    (target_x, target_y), caching the waypoint list on the entity."""
+    from core import navmesh
+
+    x = float(entity.get("x", 0.0) or 0.0)
+    y = float(entity.get("y", 0.0) or 0.0)
+    tx = float(entity.get("target_x", x) or x)
+    ty = float(entity.get("target_y", y) or y)
+    waypoints = navmesh.find_path_world(x, y, tx, ty)
+    entity["_path"] = waypoints
+    entity["_path_target"] = (tx, ty)
+    entity["_path_age_ticks"] = 0
+
+
 def _move_entity(entity):
+    """Advance the entity one fixed step along its cached walkable path.
+    Pathfinding itself is deferred to `_recompute_path` so the hot per-tick
+    loop is O(1). Corner-cutting is already prevented inside A* (see navmesh).
+    """
     _ensure_spatial_fields(entity)
     x = float(entity["x"])
     y = float(entity["y"])
     tx = float(entity["target_x"])
     ty = float(entity["target_y"])
-    nx = x + (tx - x) * MOVE_LERP
-    ny = y + (ty - y) * MOVE_LERP
+    if math.hypot(tx - x, ty - y) <= MOVE_ARRIVAL_EPS:
+        entity["_path"] = []
+        entity["_path_target"] = (tx, ty)
+        entity["_stuck_empty_path_ticks"] = 0
+        return
+
+    if _path_needs_replan(entity):
+        _recompute_path(entity)
+
+    waypoints = list(entity.get("_path") or [])
+    # If the solver can't produce waypoints for several ticks in a row, the
+    # entity is usually standing on (or immediately boxed by) a blocked tile.
+    # Recover deterministically by snapping to nearest walkable tile center.
+    if not waypoints:
+        stuck_ticks = int(entity.get("_stuck_empty_path_ticks", 0) or 0) + 1
+        entity["_stuck_empty_path_ticks"] = stuck_ticks
+        if stuck_ticks >= UNSTICK_EMPTY_PATH_TICKS:
+            from core import navmesh
+            sx, sy = navmesh.world_to_tile(x, y)
+            gx, gy = navmesh.world_to_tile(tx, ty)
+
+            def _escape_tile_with_path(start_tx: int, start_ty: int, goal_tx: int, goal_ty: int, max_r: int = 24):
+                # Deterministic ring scan around current tile; pick first tile
+                # that is walkable AND has a non-empty path to goal.
+                if navmesh.is_walkable(start_tx, start_ty):
+                    p0 = navmesh.find_path_tiles(start_tx, start_ty, goal_tx, goal_ty)
+                    if p0:
+                        return start_tx, start_ty
+                for r in range(1, max_r + 1):
+                    for dx in range(-r, r + 1):
+                        for dy in range(-r, r + 1):
+                            if abs(dx) != r and abs(dy) != r:
+                                continue
+                            cx, cy = start_tx + dx, start_ty + dy
+                            if not navmesh.is_walkable(cx, cy):
+                                continue
+                            path = navmesh.find_path_tiles(cx, cy, goal_tx, goal_ty)
+                            if path:
+                                return cx, cy
+                return None
+
+            chosen = _escape_tile_with_path(sx, sy, gx, gy, max_r=24)
+            if chosen is None:
+                # Last-resort fallback: nearest walkable, even if we can't
+                # prove path connectivity this tick.
+                chosen = navmesh.nearest_walkable(sx, sy, max_radius=24)
+            nx_t, ny_t = int(chosen[0]), int(chosen[1])
+            nx_w, ny_w = navmesh.tile_to_world(nx_t, ny_t)
+            entity["x"], entity["y"] = _clamp_world(nx_w, ny_w)
+            entity["_path"] = []
+            entity["_path_target"] = None
+            entity["_path_age_ticks"] = 0
+            # Even if current tile is technically walkable, force a clean replan
+            # cycle after the stuck window so workers don't remain frozen.
+            entity["_stuck_empty_path_ticks"] = 0
+        return
+    else:
+        entity["_stuck_empty_path_ticks"] = 0
+
+    remaining_step = MOVE_STEP_PX
+    nx, ny = x, y
+    while waypoints and remaining_step > 0.0001:
+        wx, wy = waypoints[0]
+        dx = wx - nx
+        dy = wy - ny
+        dist = math.hypot(dx, dy)
+        if dist <= MOVE_ARRIVAL_EPS:
+            waypoints.pop(0)
+            continue
+        if dist <= remaining_step:
+            nx, ny = wx, wy
+            remaining_step -= dist
+            waypoints.pop(0)
+        else:
+            nx += (dx / dist) * remaining_step
+            ny += (dy / dist) * remaining_step
+            remaining_step = 0.0
+    entity["_path"] = waypoints
+    entity["_path_age_ticks"] = int(entity.get("_path_age_ticks", 0) or 0) + 1
     entity["x"], entity["y"] = _clamp_world(nx, ny)
 
 
@@ -596,11 +843,15 @@ def update_spatial_world(shared):
     entities = shared.setdefault("entities", {})
     for entity in entities.values():
         _ensure_spatial_fields(entity)
-    if _apply_global_route_targets(shared):
+    global_parade = _apply_global_route_targets(shared)
+    if global_parade:
         for entity in entities.values():
+            if str(entity.get("type", "") or "").lower() == "worker":
+                continue
             _move_entity(entity)
-        return
     for entity in entities.values():
+        if global_parade and str(entity.get("type", "") or "").lower() != "worker":
+            continue
         manual_target = entity.get("manual_target")
         if isinstance(manual_target, dict) and bool(manual_target.get("active", True)):
             tx = float(manual_target.get("x", entity.get("x", 0.0)) or 0.0)
@@ -622,6 +873,8 @@ def update_spatial_world(shared):
             continue
         _set_behavior_target(entity, entities, shared)
     for entity in entities.values():
+        if global_parade and str(entity.get("type", "") or "").lower() != "worker":
+            continue
         _move_entity(entity)
 
 
@@ -852,6 +1105,19 @@ def run_loop(state):
         elif entity_type in {"banker", "bank"}:
             handle_bank(entity, shared)
 
+    # Nano-economy hooks: banker fees (reactive to worker_earn), thief steals
+    # (reactive to home_storage), cop recovery (reactive to steal events).
+    # Runs AFTER agent handlers so it can see this tick's emitted events.
+    # No-op when core.flags.NANO_ECONOMY_HOOKS is off.
+    from core.nano_economy import apply_nano_economy
+    apply_nano_economy(shared)
+
+    # PASS 1: translate fresh economy events into per-agent symbolic action
+    # queues. Pure data (no movement is performed here; movement stays with
+    # the spatial subsystem below and is untouched by PASS 1).
+    from core.action_queue import apply_event_actions
+    apply_event_actions(shared)
+
     update_spatial_world(shared)
 
     economy = shared.setdefault("economy", {})
@@ -904,10 +1170,17 @@ def run_loop(state):
         elif event_type == "credit":
             add_memory(event.get("agent_id"), event, float(event.get("amount", 0.0) or 0.0))
         elif event_type == "worker_earn":
-            reward = float(event.get("reward", 0.0) or 0.0)
-            cost = float(event.get("cost", 0.0) or 0.0)
-            tax = float(event.get("worker_tax", 0.0) or 0.0)
-            add_memory(event.get("worker_id"), event, reward - cost - tax)
+            # New FSM emits a flat `amount`; legacy events carried
+            # reward/cost/worker_tax. Accept both so replayed logs still
+            # produce the right memory delta.
+            if "amount" in event:
+                delta = float(event.get("amount", 0.0) or 0.0)
+            else:
+                reward = float(event.get("reward", 0.0) or 0.0)
+                cost = float(event.get("cost", 0.0) or 0.0)
+                tax = float(event.get("worker_tax", 0.0) or 0.0)
+                delta = reward - cost - tax
+            add_memory(event.get("worker_id"), event, delta)
         elif event_type == "worker_support_received":
             add_memory(event.get("worker_id"), event, float(event.get("amount", 0.0) or 0.0))
             add_memory(event.get("bank_id"), event, -float(event.get("amount", 0.0) or 0.0))

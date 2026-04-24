@@ -2,10 +2,11 @@
 {% load staticfiles %}
 
 {% block content %}
+<div style="position:fixed;top:22px;right:4px;z-index:999999;font:11px monospace;background:#c8e6c9;padding:2px 8px;border:1px solid #333;">TEST_HOME</div>
 <br>
 <br>
 <div>
-	<div id="game-container" style="text-align: center"></div>
+	<div id="game-container" style="text-align:center;min-height:320px;width:100%;max-width:100%;background:#e8eef5;border:1px solid #c5d0e0;box-sizing:border-box"></div>
 
 	<div style="width:55%; margin: 0 auto; margin-top:4.5em">
 		<h3 style="margin-bottom:-0.5em; font-size:1.5em">Current Time:</h3>
@@ -23,6 +24,16 @@
 				  <button id="pause_button" type="button" class="btn btn-default">
 				    <strong style=" font-size:1.2em"><i class="glyphicon glyphicon-pause"></i> &nbsp;Pause</strong>
 				  </button>
+				  <button id="demo_cycle_button" type="button" class="btn btn-primary">
+				    <strong style=" font-size:1.2em"><i class="glyphicon glyphicon-flash"></i> &nbsp;Start Scenario</strong>
+				  </button>
+				  <button id="bank_reset_button" type="button" class="btn btn-warning">
+				    <strong style=" font-size:1.2em"><i class="glyphicon glyphicon-repeat"></i> &nbsp;Reset Economy</strong>
+				  </button>
+				  <div style="margin-top:8px;font-size:0.8em;color:#444;text-align:right;">
+				  	<span id="demo_cycle_status">Ready</span>
+				  	<br><span id="bank_reset_status">Baseline loaded</span>
+				  </div>
 
 				</h2>
 				
@@ -31,6 +42,64 @@
 
 		<br>
 		<hr style="border-color:#999999">
+		<br>
+
+		<div class="media" style="background-color:#eaf2ff; padding:1em 2em; border-radius:10px; border:1px solid #c5d8ff;">
+		  <div class="media-body">
+		  	<h2 style="margin-bottom:0.4em; font-size:1.85em;">Bank Panel (Federal Reserve View)</h2>
+		  	<p style="font-size:1.05em; margin-bottom:0.4em;">
+		  		<strong>Purpose:</strong> One judge-facing card for all economic activity, wallets, and per-agent financial records.
+		  	</p>
+		  	<p style="font-size:1.05em; margin-bottom:0.8em;">
+		  		<strong>Legend:</strong> Balance = liquid funds, Stored = home reserve, Collected/Lost = lifetime flow, Net = collected - lost.
+		  	</p>
+		  	<div class="row">
+		  		<div class="col-md-6">
+		  			<p style="font-size:1.15em; margin-top:0.4em;"><strong>Real Settlement Wallets (Arc/Circle)</strong></p>
+		  			<p style="font-size:1.05em;"><strong>Entity Wallet:</strong> <span id="bank_real_wallet_1">loading...</span></p>
+		  			<p style="font-size:1.05em;"><strong>Destination Wallet:</strong> <span id="bank_real_wallet_2">loading...</span></p>
+		  			<p style="font-size:1.05em;"><strong>Last Drip Targets:</strong> <span id="bank_drip_targets">-</span></p>
+		  		</div>
+		  		<div class="col-md-6">
+		  			<p style="font-size:1.15em; margin-top:0.4em;"><strong>Virtual Wallets (In-Simulation)</strong></p>
+		  			<p style="font-size:1.05em;"><strong>Total Worker Virtual Wallets:</strong> <span id="bank_virtual_workers">0.000000</span></p>
+		  			<p style="font-size:1.05em;"><strong>Total Cop Virtual Wallets:</strong> <span id="bank_virtual_cops">0.000000</span></p>
+		  			<p style="font-size:1.05em;"><strong>Worker + Cop Stored Reserve:</strong> <span id="bank_virtual_stored">0.000000</span></p>
+		  		</div>
+		  	</div>
+		  	<div class="row" style="margin-top:0.8em;">
+		  		<div class="col-md-12">
+		  			<p style="font-size:1.15em; margin-bottom:0.4em;"><strong>Transaction Health</strong></p>
+		  			<p style="font-size:1.05em;">
+		  				<span><strong>Real Tx:</strong> <span id="bank_real_tx_count">0</span></span>
+		  				&nbsp;|&nbsp;<span><strong>Simulated Tx:</strong> <span id="bank_sim_tx_count">0</span></span>
+		  				&nbsp;|&nbsp;<span><strong>Failed Tx:</strong> <span id="bank_failed_tx_count">0</span></span>
+		  				&nbsp;|&nbsp;<span><strong>Cost/Action:</strong> <span id="bank_cost_per_action">0.000000</span></span>
+		  			</p>
+		  			<p style="font-size:1.05em;"><strong>Status:</strong> <span id="bank_tx_status">waiting...</span></p>
+		  		</div>
+		  	</div>
+		  	<div style="margin-top:0.8em; overflow-x:auto;">
+		  		<table class="table table-striped table-condensed" style="background:#ffffff; font-size:0.95em;">
+		  			<thead>
+		  				<tr>
+		  					<th>Agent</th>
+		  					<th>Role</th>
+		  					<th>Balance</th>
+		  					<th>Stored</th>
+		  					<th>Collected</th>
+		  					<th>Lost</th>
+		  					<th>Net</th>
+		  					<th>Activity</th>
+		  				</tr>
+		  			</thead>
+		  			<tbody id="bank_panel_rows">
+		  				<tr><td colspan="8">Waiting for live data...</td></tr>
+		  			</tbody>
+		  		</table>
+		  	</div>
+		  </div>
+		</div>
 		<br>
 
 		{% for p_name, p_name_os in persona_names %}
@@ -43,14 +112,31 @@
 			  <div class="media-body" style='padding-left:3em; padding-top:0.5em; padding-bottom:1em'>
 			  	<div class="row">
 			    	<h2 class="col-md-8" id="name__{{ p_name_os }}" style="margin-bottom:0.8em; font-size:1.85em; ">
-			    		{{p_name}} &nbsp;&nbsp;
+			    		{{p_name}} (<span id="role__{{ p_name_os }}">Agent</span>) &nbsp;&nbsp;
 			    		<a href="{% url 'replay_persona_state' sim_code step p_name_os %}" style="font-size:0.6em">State Details</a>
 			    	</h2>
 			    </div>
 			    <div style="">
-					  <p style="font-size:1.2em"><strong>Current Action:</strong> <br><span id="current_action__{{ p_name_os }}"></span></p>
-					  <p style="font-size:1.2em"><strong>Location:</strong> <br><span id="target_address__{{ p_name_os }}"></span></p>
-					  <p style="font-size:1.2em"><strong>Current Conversation:</strong> <br><span id="chat__{{ p_name_os }}"></span></p>
+					  <p style="font-size:1.2em; margin-top:0.8em"><strong>State</strong></p>
+					  <p style="font-size:1.2em"><strong>Balance:</strong> <span id="balance__{{ p_name_os }}">0.000000</span></p>
+					  <p id="stored_row__{{ p_name_os }}" style="font-size:1.2em; display:none"><strong>Stored:</strong> <span id="home_storage__{{ p_name_os }}">0.000000</span></p>
+					  <p style="font-size:1.2em"><strong>Collected:</strong> <span id="lifetime_collected__{{ p_name_os }}">0.000000</span></p>
+					  <p style="font-size:1.2em"><strong>Lost:</strong> <span id="lifetime_lost__{{ p_name_os }}">0.000000</span></p>
+					  <p style="font-size:1.2em"><strong>Net:</strong> <span id="lifetime_net__{{ p_name_os }}">0.000000</span></p>
+					  <p style="font-size:1.2em; margin-top:0.8em"><strong>Activity</strong></p>
+					  <p style="font-size:1.2em"><strong>Action:</strong> <span id="current_action__{{ p_name_os }}">idle</span></p>
+					  <p style="font-size:1.2em"><strong>Location:</strong> <span id="location__{{ p_name_os }}">(0, 0) -> home</span></p>
+					  <div id="cop_stats__{{ p_name_os }}" style="display:none">
+					  	<p style="font-size:1.2em; margin-top:0.8em"><strong>Cop Ledger</strong></p>
+					  	<p style="font-size:1.2em"><strong>Catches:</strong> <span id="cop_catches__{{ p_name_os }}">0</span></p>
+					  	<p style="font-size:1.2em"><strong>Total Taken:</strong> <span id="cop_taken__{{ p_name_os }}">0.000000</span></p>
+					  	<p style="font-size:1.2em"><strong>Bank Full Confiscations:</strong> <span id="cop_bank_conf_count__{{ p_name_os }}">0</span></p>
+					  	<p style="font-size:1.2em"><strong>Bank Confiscation Total:</strong> <span id="cop_bank_conf_total__{{ p_name_os }}">0.000000</span></p>
+					  </div>
+					  <p style="font-size:1.2em; margin-top:0.8em"><strong>Flow</strong></p>
+					  <p style="font-size:1.2em"><span id="flow__{{ p_name_os }}">No recent financial flow</span></p>
+					  <p style="font-size:1.2em; margin-top:0.8em"><strong>Recent</strong></p>
+					  <p style="font-size:1.2em"><span id="recent__{{ p_name_os }}">None</span></p>
 					</div>
 			  </div>
 			</div>	
@@ -72,8 +158,8 @@
 <div style="padding-bottom:15em"> </div>
 
 
-<!-- partial -->
-<script src='https://cdn.jsdelivr.net/npm/phaser@3.55.2/dist/phaser.js'></script>
+<!-- Phaser must load before home/main_script.html (same order as bridge /simulator pages). -->
+<script src="https://cdn.jsdelivr.net/npm/phaser@3/dist/phaser.js"></script>
 {% include 'home/main_script.html' %}
 {% endblock content %}
 

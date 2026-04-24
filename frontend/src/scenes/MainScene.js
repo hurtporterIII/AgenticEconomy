@@ -94,6 +94,10 @@ const ACTION_TINTS = {
   steal: 0xff556f,
   chase: 0x55a8ff,
   bank: 0xf2ce6f,
+  /** Sub-cent / high-frequency spend (nanopayment-style intent → Arc sample) */
+  spend: 0x00ffd0,
+  /** Inbound micro-credit */
+  receive: 0x8cffb4,
   idle: 0xffffff,
 };
 
@@ -101,13 +105,50 @@ function zoneForType(type) {
   return DISTRICTS[type] || DISTRICTS.worker;
 }
 
+// Map PASS 4's backend `current_action` labels to the short human phrases
+// shown above each sprite. Unknown or empty labels return null so callers
+// can keep their fallback heuristic.
+const HUMAN_ACTION_LABELS = {
+  buying_intel: "Buying intel",
+  stealing_from_worker: "Stealing from worker",
+  chasing_thief: "Chasing thief",
+  depositing_at_bank: "Depositing at bank",
+  returning_to_station: "Returning to station",
+  moving_to_worker_home: "Heading to worker home",
+  waiting: "Waiting",
+  idle: "Idle",
+};
+
+function humanizeCurrentAction(label) {
+  if (!label || typeof label !== "string") return null;
+  const key = label.toLowerCase();
+  if (HUMAN_ACTION_LABELS[key]) return HUMAN_ACTION_LABELS[key];
+  if (key.startsWith("moving_to_")) {
+    const where = key.slice("moving_to_".length).replaceAll("_", " ");
+    return `Moving to ${where}`;
+  }
+  // Any unknown but non-empty backend label still renders as something.
+  return "Idle";
+}
+
 function inferActionFromEvent(event) {
   const type = String(event?.type || "");
   if (type === "worker_earn") return "work";
+  if (type === "worker_commute_home") return "work";
+  if (type === "worker_commute_bank" || type === "worker_bank_deposit") return "bank";
   if (type === "steal_agent" || type === "steal_bank") return "steal";
   if (type === "cop_chase") return "chase";
-  if (type.startsWith("bank_") || type === "debit" || type === "credit") return "bank";
+  if (type === "debit") return "spend";
+  if (type === "credit") return "receive";
+  if (type.startsWith("bank_")) return "bank";
   return "idle";
+}
+
+function formatUsdcPulse(amount, signChar) {
+  const n = Math.abs(Number(amount));
+  if (!Number.isFinite(n) || n === 0) return `${signChar}0 USDC`;
+  const decimals = n < 0.01 ? 4 : 2;
+  return `${signChar}${n.toFixed(decimals)} USDC`;
 }
 
 export default class MainScene extends Phaser.Scene {
@@ -267,9 +308,23 @@ export default class MainScene extends Phaser.Scene {
     }
   }
 
-  applyWorld(snapshot, newEvents = []) {
+  /** Lightweight per-tick update used by the 300ms demo poll. Refreshes the
+   *  floating action labels without re-running the full world sync. */
+  applyLiveActions(currentActions = {}) {
+    this.liveActions = currentActions || {};
+    const entities = this.lastKnownState?.entities;
+    if (entities) this.refreshStories(entities);
+  }
+
+  applyWorld(snapshot, newEvents = [], currentActions = {}) {
     if (!snapshot?.entities) return;
     this.lastKnownState = snapshot;
+    // Final demo pass: trust the backend's per-entity `current_action` as
+    // the source of truth for the label floating above each sprite. The
+    // heuristic event-based inference (captureActionsFromEvents) still
+    // feeds sprite TINTS (chase/steal/etc.) so the look-and-feel stays
+    // intact, but the readable line comes from the server.
+    this.liveActions = currentActions || {};
     this.captureActionsFromEvents(newEvents);
     this.syncEntities(snapshot.entities, snapshot.balances || {});
     this.refreshStories(snapshot.entities);
@@ -291,6 +346,23 @@ export default class MainScene extends Phaser.Scene {
       if (event.type === "cop_chase" && event.cop_id && event.target_id) {
         if (!this.firstChaseCopId) this.firstChaseCopId = event.cop_id;
         this.lockChaseCamera(event.cop_id, event.target_id, 2600);
+      }
+      if (event.type === "debit" && event.agent_id) {
+        this.actionCache.set(event.agent_id, { action: "spend", until: now + 1700 });
+      }
+      if (event.type === "credit" && event.agent_id) {
+        this.actionCache.set(event.agent_id, { action: "receive", until: now + 1700 });
+      }
+      if ((event.type === "worker_commute_bank" || event.type === "worker_bank_deposit") && event.worker_id) {
+        this.actionCache.set(event.worker_id, { action: "bank", until: now + 1600 });
+      }
+      if (event.type === "settlement_cycle" && Array.isArray(event.summary?.records)) {
+        for (const rec of event.summary.records) {
+          const from = rec.from_wallet;
+          const to = rec.to_wallet;
+          if (from) this.actionCache.set(String(from), { action: "spend", until: now + 2400 });
+          if (to) this.actionCache.set(String(to), { action: "receive", until: now + 2400 });
+        }
       }
       const txHash = String(event?.tx_hash || "");
       if (txHash.startsWith("0x")) {
@@ -406,6 +478,7 @@ export default class MainScene extends Phaser.Scene {
   }
 
   refreshStories(entityMap) {
+    const live = this.liveActions || {};
     for (const [id, entity] of Object.entries(entityMap || {})) {
       const action = this.inferAction(id, entity);
       let line = "Walking the district";
@@ -413,6 +486,15 @@ export default class MainScene extends Phaser.Scene {
       if (action === "steal") line = "Lining up a steal";
       if (action === "chase") line = "Pursuing suspect";
       if (action === "bank") line = "Managing funds";
+      if (action === "spend") line = "Nano spend (USDC)";
+      if (action === "receive") line = "Nano inflow (USDC)";
+      // Backend-authoritative label wins (from PASS 4 current_action).
+      // We only override when the server has something to say for this
+      // entity; otherwise keep the heuristic line so workers / bankers
+      // without queues still get a friendly status.
+      const serverLabel = live[id] || entity?.current_action;
+      const humanLine = humanizeCurrentAction(serverLabel);
+      if (humanLine) line = humanLine;
       this.agentStories.set(id, { line, progress: 0.6, mood: action });
     }
   }
@@ -508,12 +590,43 @@ export default class MainScene extends Phaser.Scene {
 
   renderEventFx(events) {
     for (const event of events || []) {
-      if (event.type === "worker_earn" && event.worker_id) {
+      if (event.type === "worker_commute_bank" && event.worker_id) {
+        this.spawnFloatText(event.worker_id, "→ BANK", "#f2ce6f");
+      } else if (event.type === "worker_bank_deposit" && event.worker_id) {
+        const amt = Number(event.amount || 0);
+        this.spawnFloatText(event.worker_id, formatUsdcPulse(amt, "-"), "#f2ce6f");
+      } else if (event.type === "worker_earn" && event.worker_id) {
         this.spawnFloatText(event.worker_id, `+${Number(event.reward || 0).toFixed(1)}`, "#66ff9a");
       } else if ((event.type === "steal_agent" || event.type === "steal_bank") && event.thief_id) {
         this.spawnFloatText(event.thief_id, `+$${Number(event.amount || 0).toFixed(1)}`, "#ff7c9a");
+      } else if (event.type === "bank_zone_confiscation" && event.thief_id) {
+        const amt = Math.abs(Number(event.amount || 0));
+        this.spawnFloatText(event.thief_id, `BANK PENALTY -$${amt.toFixed(1)}`, "#ff2f55");
+        if (event.cop_id) {
+          this.spawnFloatText(event.cop_id, `CONFISCATE +$${amt.toFixed(1)}`, "#7bb8ff");
+        }
       } else if (event.type === "cop_chase" && event.cop_id) {
         this.spawnFloatText(event.cop_id, "CHASE", "#74b7ff");
+      } else if (event.type === "debit" && event.agent_id) {
+        const amt = Number(event.amount || 0);
+        this.spawnFloatText(event.agent_id, formatUsdcPulse(amt, "-"), "#00ffd0");
+      } else if (event.type === "credit" && event.agent_id) {
+        const amt = Number(event.amount || 0);
+        this.spawnFloatText(event.agent_id, formatUsdcPulse(amt, "+"), "#8cffb4");
+      } else if (event.type === "settlement_cycle" && Array.isArray(event.summary?.records)) {
+        for (const rec of event.summary.records) {
+          const from = rec.from_wallet;
+          const to = rec.to_wallet;
+          const amt = Number(rec.amount_submitted || 0);
+          const arcTag = rec.is_real ? " Arc" : "";
+          const short = amt < 0.01 && amt > 0 ? amt.toFixed(4) : amt.toFixed(2);
+          if (from && this.entities.has(String(from))) {
+            this.spawnFloatText(String(from), `⚡settle −${short}${arcTag}`, "#5cf9ff");
+          }
+          if (to && this.entities.has(String(to))) {
+            this.spawnFloatText(String(to), `⚡settle +${short}${arcTag}`, "#9dffb8");
+          }
+        }
       }
     }
   }

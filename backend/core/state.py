@@ -52,9 +52,17 @@ def build_personality(entity_type, behavior_settings=None):
     return personality
 
 
+WORK_TREASURY_ID = "B11_work_treasury"
+WORK_TREASURY_START = 1000.0
+
 state = {
     "entities": {},
-    "balances": {},
+    # Seed the B11 work treasury so workers have a real source to pull
+    # their nano-payments from. Every worker "earn" at B11 is a real
+    # transfer: B11_work_treasury -> worker_<n>. Starts with 1000 USDC,
+    # at 0.001 USDC per shift that's 1,000,000 shifts of runway — more
+    # than enough for the demo.
+    "balances": {WORK_TREASURY_ID: WORK_TREASURY_START},
     "events": create_event_buffer(),
     "behavior_settings": default_behavior_settings(),
     "economy": default_economy_state(),

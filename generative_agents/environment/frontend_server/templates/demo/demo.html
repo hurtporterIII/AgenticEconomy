@@ -2,6 +2,7 @@
 {% load staticfiles %}
 
 {% block content %}
+<div style="position:fixed;top:22px;right:4px;z-index:999999;font:11px monospace;background:#bbdefb;padding:2px 8px;border:1px solid #333;">TEST_DEMO</div>
 <br>
 <br>
 <div>
@@ -107,7 +108,7 @@
 
 
 {% block js_content %}
-<script src='https://cdn.jsdelivr.net/npm/phaser@3.55.2/dist/phaser.js'></script>
+{# Phaser is loaded from base.html head #}
 {% include 'demo/main_script.html' %}
 <script>
 	{% for p in persona_names %}

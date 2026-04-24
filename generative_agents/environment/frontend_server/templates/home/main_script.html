@@ -1,4 +1,5 @@
 {% load staticfiles %}
+<div style="position:fixed;top:42px;right:4px;z-index:999999;font:11px monospace;background:#fff9c4;padding:2px 8px;border:1px solid #333;">TEST_MAIN_SCRIPT</div>
 
 <div id="step" style="display:none">{{step}}</div>
 <div id="sim_code" style="display:none">{{sim_code}}</div>
@@ -10,6 +11,8 @@
 </div>
 
 <script type="text/javascript">
+	console.log("🔥 MAIN_SCRIPT LIVE VERSION 2");
+	console.log("🔥 SMALLVILLE RENDER ACTIVE");
 	/*
 	  Main resources: 
 	  https://www.youtube.com/watch?v=cKIG1lKwLeo&t=401s&ab_channel=HongLy
@@ -50,6 +53,10 @@
 	  height: 800,
 	  parent: "game-container",
 	  pixelArt: true,
+	  scale: {
+	    mode: Phaser.Scale.FIT,
+	    autoCenter: Phaser.Scale.CENTER_BOTH,
+	  },
 	  physics: {
 	    default: "arcade",
 	    arcade: {
@@ -75,16 +82,15 @@
 	//     update: update },
 	//   scale: {zoom: 0.5} };
 
-	// Creating the game instance and setting up the main Phaser variables that  
-	// will be used in it. 
-	const game = new Phaser.Game(config);
 	let cursors;
 	let player;
 	let showDebug = false;
 
 	// Persona related variables. This should have the name of the persona as its 
 	// keys, and the instances of the Persona class as the values.
-	const MAX_VISIBLE_PERSONAS = 6;
+	// Bridge mode must keep every spawned actor live in both world + side cards.
+	// The previous cap of 6 left worker_3..worker_6 stale/blank in "State Details".
+	const MAX_VISIBLE_PERSONAS = 128;
 	var spawn_tile_loc = {};
 	// for (var i = 0; i < persona_names.length; i++) { 
 	// 	spawn_tile_loc[persona_names[i]] = [0, 0]
@@ -120,9 +126,15 @@
 		});
 		return picks;
 	}
-	let visiblePersonaNames = chooseVisiblePersonas(Object.keys(persona_names), MAX_VISIBLE_PERSONAS);
+	// Hard rule for bridge demo: do NOT filter personas in the active renderer.
+	// Any worker spawned by backend must have a live sprite + live card updates.
+	let visiblePersonaNames = Object.keys(persona_names);
+	// Keep fallback helper reachable for future perf tuning, but bridge mode
+	// now deliberately runs full visibility.
+	if (!visiblePersonaNames || visiblePersonaNames.length === 0) {
+		visiblePersonaNames = chooseVisiblePersonas(Object.keys(persona_names), MAX_VISIBLE_PERSONAS);
+	}
 	visiblePersonaNames.forEach(function(key){ spawn_tile_loc[key] = persona_names[key]; });
-	console.log(spawn_tile_loc);
 
 	var personas = {};
 	var pronunciatios = {};
@@ -139,10 +151,11 @@
 	// <movement_speed> determines how fast we move at each upate cylce. 
 	let movement_speed = 8; 
 
-	// <timer_max> determines how frequently our update function will query the 
-	// frontend server. If it's higher, we wait longer cycles. 
-	let timer_max = 4;
+	// <timer_max> determines poll frequency. Bridge mode uses FastAPI AUTO_TICK for sim time;
+	// polling only fetches state — a slightly faster poll keeps sprite follow smooth.
+	let timer_max = 1;
 	let timer = timer_max;
+	let bank_diag_poll_countdown = 0;
 
 	// <phase> -- there are three phases: "process," "update," and "execute."
 	let phase = "update"; // or "update" or "execute"
@@ -169,6 +182,149 @@
 		return "Agent";
 	}
 
+	function formatBridgeMoney(value) {
+		let n = Number(value || 0);
+		if (!Number.isFinite(n)) n = 0;
+		return n.toFixed(6);
+	}
+
+	function summarizeBridgeRecent(recent) {
+		if (!Array.isArray(recent) || recent.length === 0) return "None";
+		const lines = recent.slice(-5).map(function(ev){
+			if (typeof ev === "string") return ev;
+			if (!ev || typeof ev !== "object") return "";
+			if (ev.summary) return String(ev.summary);
+			const t = String(ev.type || "event");
+			const amount = (ev.amount !== undefined && ev.amount !== null) ? Number(ev.amount || 0).toFixed(6) : null;
+			return amount !== null ? (t + " " + amount) : t;
+		}).filter(Boolean);
+		return lines.length ? lines.map(function(l){ return "- " + l; }).join("<br>") : "None";
+	}
+
+	function updateBankPanelFromPersona(personaPayload) {
+		let rowsEl = document.getElementById("bank_panel_rows");
+		if (!rowsEl) return;
+		let entries = [];
+		let workerWalletTotal = 0;
+		let copWalletTotal = 0;
+		let storedTotal = 0;
+		Object.keys(personaPayload || {}).forEach(function(name){
+			let p = personaPayload[name] || {};
+			let role = String(p["role"] || "").toLowerCase();
+			if (role !== "worker" && role !== "cop") return;
+			let balance = Number(p["balance"] || 0);
+			let stored = Number(p["home_storage"] || 0);
+			let collected = Number(p["lifetime_collected"] || 0);
+			let lost = Number(p["lifetime_lost"] || 0);
+			let net = Number(p["lifetime_net"]);
+			if (!Number.isFinite(net)) net = collected - lost;
+			if (role === "worker") workerWalletTotal += balance;
+			if (role === "cop") copWalletTotal += balance;
+			storedTotal += stored;
+			entries.push({
+				name: name,
+				role: roleTitleFromPayloadRole(role),
+				balance: balance,
+				stored: stored,
+				collected: collected,
+				lost: lost,
+				net: net,
+				action: String(p["current_action"] || "idle")
+			});
+		});
+		entries.sort(function(a, b){ return a.name.localeCompare(b.name); });
+		if (!entries.length) {
+			rowsEl.innerHTML = "<tr><td colspan='8'>No worker/cop rows yet.</td></tr>";
+		} else {
+			rowsEl.innerHTML = entries.map(function(r){
+				return "<tr>"
+					+ "<td>" + r.name + "</td>"
+					+ "<td>" + r.role + "</td>"
+					+ "<td>" + formatBridgeMoney(r.balance) + "</td>"
+					+ "<td>" + formatBridgeMoney(r.stored) + "</td>"
+					+ "<td>" + formatBridgeMoney(r.collected) + "</td>"
+					+ "<td>" + formatBridgeMoney(r.lost) + "</td>"
+					+ "<td>" + formatBridgeMoney(r.net) + "</td>"
+					+ "<td>" + r.action + "</td>"
+					+ "</tr>";
+			}).join("");
+		}
+		let workersEl = document.getElementById("bank_virtual_workers");
+		if (workersEl) workersEl.innerHTML = formatBridgeMoney(workerWalletTotal);
+		let copsEl = document.getElementById("bank_virtual_cops");
+		if (copsEl) copsEl.innerHTML = formatBridgeMoney(copWalletTotal);
+		let storedEl = document.getElementById("bank_virtual_stored");
+		if (storedEl) storedEl.innerHTML = formatBridgeMoney(storedTotal);
+	}
+
+	function updateBankTxDiagnosticsCard(diag) {
+		if (!diag || typeof diag !== "object") return;
+		let diagnostics = (diag["diagnostics"] && typeof diag["diagnostics"] === "object") ? diag["diagnostics"] : {};
+		let metrics = (diag["metrics"] && typeof diag["metrics"] === "object") ? diag["metrics"] : {};
+		let config = (diag["config"] && typeof diag["config"] === "object") ? diag["config"] : {};
+		let realTxEl = document.getElementById("bank_real_tx_count");
+		if (realTxEl) realTxEl.innerHTML = String(diagnostics["real_tx_count"] || 0);
+		let simTxEl = document.getElementById("bank_sim_tx_count");
+		if (simTxEl) simTxEl.innerHTML = String(diagnostics["simulated_tx_count"] || 0);
+		let failedTxEl = document.getElementById("bank_failed_tx_count");
+		if (failedTxEl) failedTxEl.innerHTML = String(diagnostics["failed_tx_count"] || 0);
+		let cpaEl = document.getElementById("bank_cost_per_action");
+		if (cpaEl) cpaEl.innerHTML = formatBridgeMoney(metrics["cost_per_action"] || 0);
+		let statusEl = document.getElementById("bank_tx_status");
+		if (statusEl) statusEl.innerHTML = String(diagnostics["last_status"] || "unknown") + " (" + String(diagnostics["last_mode"] || "simulate") + ")";
+		let rw1 = document.getElementById("bank_real_wallet_1");
+		if (rw1) rw1.innerHTML = config["has_wallet_address"] ? "Configured (Entity settlement wallet)" : "Missing";
+		let rw2 = document.getElementById("bank_real_wallet_2");
+		if (rw2) rw2.innerHTML = config["has_destination_address"] ? "Configured (Destination wallet)" : "Missing";
+		let drips = diagnostics["last_native_drip_targets"];
+		let dripsEl = document.getElementById("bank_drip_targets");
+		if (dripsEl) dripsEl.innerHTML = Array.isArray(drips) && drips.length ? drips.join(" | ") : "-";
+	}
+
+	function pollBankTxDiagnosticsIfNeeded(forceNow) {
+		if (!bridge_mode) return;
+		if (!forceNow && bank_diag_poll_countdown > 0) {
+			bank_diag_poll_countdown -= 1;
+			return;
+		}
+		bank_diag_poll_countdown = 8;
+		let req = new XMLHttpRequest();
+		req.overrideMimeType("application/json");
+		req.open("GET", "{% url 'bridge_tx_diagnostics' %}", true);
+		req.addEventListener("load", function() {
+			if (req.status !== 200) return;
+			try {
+				let payload = JSON.parse(req.responseText || "{}");
+				if (payload && payload.ok) updateBankTxDiagnosticsCard(payload);
+			} catch (e) {}
+		});
+		req.send();
+	}
+
+	function resetFinanceCardsToZero() {
+		Object.keys(personas || {}).forEach(function(name){
+			let os = String(name).replace(/ /g, "_");
+			let lcEl = document.getElementById("lifetime_collected__" + os);
+			if (lcEl) lcEl.innerHTML = formatBridgeMoney(0);
+			let llEl = document.getElementById("lifetime_lost__" + os);
+			if (llEl) llEl.innerHTML = formatBridgeMoney(0);
+			let lnEl = document.getElementById("lifetime_net__" + os);
+			if (lnEl) lnEl.innerHTML = formatBridgeMoney(0);
+			let flowEl = document.getElementById("flow__" + os);
+			if (flowEl) flowEl.innerHTML = "No recent financial flow";
+			let recentEl = document.getElementById("recent__" + os);
+			if (recentEl) recentEl.innerHTML = "None";
+		});
+		let rowsEl = document.getElementById("bank_panel_rows");
+		if (rowsEl) rowsEl.innerHTML = "<tr><td colspan='8'>Reset complete. Waiting for fresh live activity...</td></tr>";
+		let workersEl = document.getElementById("bank_virtual_workers");
+		if (workersEl) workersEl.innerHTML = formatBridgeMoney(0);
+		let copsEl = document.getElementById("bank_virtual_cops");
+		if (copsEl) copsEl.innerHTML = formatBridgeMoney(0);
+		let storedEl = document.getElementById("bank_virtual_stored");
+		if (storedEl) storedEl.innerHTML = formatBridgeMoney(0);
+	}
+
 	// Variables for storing movements that are sent from the backend server.
 	let execute_movement;
 	let execute_count_max = tile_width/movement_speed;
@@ -178,13 +334,18 @@
 	let bridge_destination = {};
 	let bridge_velocity = {};
 	let bridge_last_update_ms = {};
+	// Interpolate toward backend target so walking animations are visible.
+	// Path intent still comes from backend movement/targets.
+	const BRIDGE_DIRECT_SPRITE_POSITION = false;
+	let bridge_last_sprite_xy = {};
 	const bridge_lerp = 0.22;
 	const bridge_arrival_epsilon = 1.2;
-	const bridge_target_blend = 0.72;
-	const bridge_predict_ms = 900;
-	const bridge_max_step = 3.2;
-	const bridge_steady_step = 2.1;
-	const bridge_stale_ms = 420;
+	// Follow economy server closely (no heavy smoothing / prediction fighting dest_x/y).
+	const bridge_target_blend = 1.0;
+	const bridge_predict_ms = 0;
+	const bridge_max_step = 4.5;
+	const bridge_steady_step = 5.5;
+	const bridge_stale_ms = 86400000;
 	let bridge_collision_layer = null;
 	let bridge_wall_layer = null;
 	let bridge_interior_ground_layer = null;
@@ -196,8 +357,15 @@
 	const bridge_body_half_h = 14;
 	let bridge_paths = {};
 	let bridge_last_path_update_ms = {};
-	const bridge_repath_interval_ms = 900;
-	const bridge_allow_wall_doors = false;
+	let bridge_last_repath_goal = {};
+	let bridge_trace_labels = {};
+	let bridge_last_srv_line = {};
+	// Pathfinding goal is always dest_x/dest_y (economy target_x/y), not server
+	// movement[] — otherwise sprites stop where the sim body is mid-commute, short of the door.
+	const bridge_repath_interval_ms = 220;
+	// Doors sit on the Wall layer; without this, A* can never step into a building.
+	// Collisions layer (collide:true tiles) remains the real blocker for impassable geometry.
+	const bridge_allow_wall_doors = true;
 	const bridge_show_building_labels = true;
 	const bridge_building_labels = [
 		{ id: "B01", name: "Isabella Apt", tx: 77.57, ty: 14.70 },
@@ -253,20 +421,15 @@
 		let tx = Math.floor(x / tile_width);
 		let ty = Math.floor(y / tile_width);
 		if (tx < 0 || ty < 0 || tx >= bridge_map_width_tiles || ty >= bridge_map_height_tiles) return true;
-		for (let i = 0; i < bridge_block_layers.length; i++) {
-			let layer = bridge_block_layers[i];
-			if (!layer) continue;
-			let tile = layer.getTileAt(tx, ty, false);
-			if (!tile) continue;
-			// Layer 0 is the dedicated collision layer: block only explicit colliders.
-			if (i === 0) {
-				if (tile.collides) return true;
-			} else {
-				// Optional wall-door exception (off by default for stricter wall adherence).
-				if (bridge_allow_wall_doors && layer === bridge_wall_layer && bridge_is_door_tile(tx, ty)) continue;
-				// Other solid layers (if enabled): any tile is blocking.
-				if (tile.index !== -1) return true;
-			}
+		// Collisions layer is the single source of truth for impassable geometry.
+		// Walls on the Wall layer are NOT treated as blockers by themselves — many
+		// wall tiles are actually doorways that must be walkable. If you need
+		// extra wall rigidity for a specific layer, add it here with a door
+		// exception using bridge_is_door_tile(tx, ty).
+		let collisionsLayer = bridge_block_layers[0];
+		if (collisionsLayer) {
+			let tile = collisionsLayer.getTileAt(tx, ty, false);
+			if (tile && tile.collides) return true;
 		}
 		return false;
 	}
@@ -379,7 +542,13 @@
 	function bridge_recompute_path(personaName, fromX, fromY, goalX, goalY) {
 		let now = performance.now();
 		let last = bridge_last_path_update_ms[personaName] || 0;
-		if ((now - last) < bridge_repath_interval_ms && bridge_paths[personaName] && bridge_paths[personaName].length > 0) return;
+		let prevG = bridge_last_repath_goal[personaName];
+		let goalJump = false;
+		if (prevG && prevG.length >= 2) {
+			goalJump = Math.hypot(goalX - prevG[0], goalY - prevG[1]) > 52;
+		}
+		bridge_last_repath_goal[personaName] = [goalX, goalY];
+		if (!goalJump && (now - last) < bridge_repath_interval_ms && bridge_paths[personaName] && bridge_paths[personaName].length > 0) return;
 		let fromTile = bridge_world_to_tile(fromX, fromY);
 		let goalTile = bridge_world_to_tile(goalX, goalY);
 		let tilePath = bridge_astar_path(fromTile[0], fromTile[1], goalTile[0], goalTile[1]);
@@ -403,7 +572,16 @@
 	//           and actually displays stuff
 	//         update() is called on each frame during the game play 
 
-	function preload() {  
+	function preload() {
+	  var load = this.load;
+	  load.once("loaderror", function (file) {
+	    console.error("[Phaser loaderror]", file && file.key, file && file.url);
+	    var el = document.getElementById("game-container");
+	    if (el && !el.dataset.aeLoaderr) {
+	      el.dataset.aeLoaderr = "1";
+	      el.insertAdjacentHTML("beforeend", "<p style=\"color:#a00;padding:12px;font:14px monospace\">Map or sprite asset failed to load (check Network tab). Key: " + String(file && file.key) + "</p>");
+	    }
+	  });
 	  // Loading the necessary images (e.g., the background image, character 
 	  // sprites). 
 
@@ -440,12 +618,15 @@
 	  // see: https://labs.phaser.io/view.html?src=src/animation/single%20sprite%20sheet.js
 	  // Joon: Technically, I think this guy had the best tutorial for atlas: 
 	  //       https://www.youtube.com/watch?v=fdXcD9X4NrQ&ab_channel=MorganPage
-	  this.load.atlas("atlas", 
-	                  "https://mikewesthad.github.io/phaser-3-tilemap-blog-posts/post-1/assets/atlas/atlas.png", 
-	                  "https://mikewesthad.github.io/phaser-3-tilemap-blog-posts/post-1/assets/atlas/atlas.json");
+	  // jsDelivr mirror: GitHub Pages is often blocked on school/corp networks.
+	  this.load.atlas("atlas",
+	                  "{% static 'assets/characters/Adam_Smith.png' %}",
+	                  "{% static 'assets/characters/atlas_misa.json' %}");
 	}
 
-	function create() {  
+	function create() {
+	  console.log("PHASER CREATE RUNNING");
+	  try {
 	  const map = this.make.tilemap({ key: "map" });
 	  bridge_map_width_tiles = map.width;
 	  bridge_map_height_tiles = map.height;
@@ -572,6 +753,7 @@
 	    bridge_destination[persona_name] = [new_sprite.x, new_sprite.y];
 	    bridge_velocity[persona_name] = [0.0, 0.0];
 	    bridge_last_update_ms[persona_name] = performance.now();
+	    bridge_last_sprite_xy[persona_name] = [new_sprite.x, new_sprite.y];
 	    pronunciatios[persona_name] = this.add.text(
 	                                   new_sprite.x - 6, 
 	                                   new_sprite.y - 42 - 32, // DEBUG 1 --- I added 32 offset on Dec 29. 
@@ -592,6 +774,21 @@
 	                                   padding: { x: 4, y: 2 },
 	                                   backgroundColor: "rgba(10,22,45,0.85)",
 	                                  }).setDepth(4).setOrigin(0.5, 0.5);
+	    if (bridge_mode) {
+	      bridge_trace_labels[persona_name] = this.add.text(
+	        new_sprite.x,
+	        new_sprite.y - 96 - 32,
+	        "trace",
+	        {
+	          font: "10px monospace",
+	          fill: "#b8f5c4",
+	          padding: { x: 4, y: 2 },
+	          backgroundColor: "rgba(0,0,0,0.62)",
+	          align: "center",
+	        }
+	      ).setDepth(4).setOrigin(0.5, 0.5);
+	      bridge_last_srv_line[persona_name] = "";
+	    }
 	  }
 
 	  // Create the player's walking animations from the texture atlas. These are
@@ -623,6 +820,14 @@
 
 	  // Keep labels strictly non-blocking so movement cannot regress.
 	  try { bridge_add_building_labels(this); } catch (e) { console.warn("building-label overlay failed", e); }
+	  } catch (createErr) {
+	    console.error("Phaser create() failed:", createErr);
+	    var gc = document.getElementById("game-container");
+	    if (gc && !gc.dataset.aeCreateErr) {
+	      gc.dataset.aeCreateErr = "1";
+	      gc.insertAdjacentHTML("beforeend", "<p style=\"color:#a00;padding:12px;font:14px monospace\">Phaser create() error: " + String(createErr && createErr.message ? createErr.message : createErr) + "</p>");
+	    }
+	  }
 	}
 
 
@@ -683,99 +888,176 @@
 	          		let dzx = (p["dest_x"] !== undefined) ? p["dest_x"] : tx;
 	          		let dzy = (p["dest_y"] !== undefined) ? p["dest_y"] : ty;
 	          		let nowMs = performance.now();
-	          		let prevTarget = bridge_target[curr_persona_name] || [tx, ty];
-	          		let lastMs = bridge_last_update_ms[curr_persona_name] || (nowMs - 100.0);
-	          		let dtMs = Math.max(16.0, nowMs - lastMs);
-	          		bridge_velocity[curr_persona_name] = [(tx - prevTarget[0]) / dtMs, (ty - prevTarget[1]) / dtMs];
-	          		bridge_last_update_ms[curr_persona_name] = nowMs;
-	          		bridge_target[curr_persona_name] = [
-	          			(prevTarget[0] + (tx - prevTarget[0]) * bridge_target_blend),
-	          			(prevTarget[1] + (ty - prevTarget[1]) * bridge_target_blend)
-	          		];
+	          		let prevMs = bridge_last_update_ms[curr_persona_name] || (nowMs - 100.0);
+	          		let prevTargetForBlend = bridge_target[curr_persona_name] || [tx, ty];
 	          		bridge_destination[curr_persona_name] = [dzx, dzy];
+	          		let dtMs = Math.max(16.0, nowMs - prevMs);
+	          		bridge_velocity[curr_persona_name] = [
+	          			(tx - prevTargetForBlend[0]) / dtMs,
+	          			(ty - prevTargetForBlend[1]) / dtMs
+	          		];
+	          		// Authoritative server pixels (same as FastAPI actor x/y via Django movement[]).
+	          		bridge_target[curr_persona_name] = [tx, ty];
+	          		bridge_last_update_ms[curr_persona_name] = nowMs;
+	          		let sh = (p["shift"] !== undefined && p["shift"] !== null && String(p["shift"]).length) ? String(p["shift"]) : "";
+	          		let wr = (p["work_route"] !== undefined && p["work_route"] !== null && String(p["work_route"]).length) ? String(p["work_route"]) : "";
+	          		let srvLine = "srv " + tx + "," + ty + " -> " + dzx + "," + dzy + (sh ? " [" + sh + "]" : "") + (wr ? " r:" + wr : "");
+	          		bridge_last_srv_line[curr_persona_name] = srvLine;
+	          		if (bridge_trace_labels[curr_persona_name]) {
+	          			let spr = personas[curr_persona_name];
+	          			let ex = spr ? Math.round(spr.x) : 0, ey = spr ? Math.round(spr.y) : 0;
+	          			let err = spr ? Math.round(Math.hypot(spr.x - dzx, spr.y - dzy)) : 0;
+	          			bridge_trace_labels[curr_persona_name].setText(srvLine + "\ncli " + ex + "," + ey + " err " + err);
+	          		}
 	          		let role_content = roleTitleFromPayloadRole(p["role"] || "");
 	          		pronunciatios[curr_persona_name].setText(role_content || roleTitleFromName(curr_persona_name));
 	          		if (role_titles[curr_persona_name]) {
 	          			role_titles[curr_persona_name].setText(role_content);
 	          		}
+	          		let roleEl = document.getElementById("role__"+curr_persona_name_os);
+	          		if (roleEl) roleEl.innerHTML = role_content || "Agent";
+	          		let copStatsWrap = document.getElementById("cop_stats__"+curr_persona_name_os);
+	          		let isCopRole = String((p["role"] || "")).toLowerCase() === "cop";
+	          		if (copStatsWrap) copStatsWrap.style.display = isCopRole ? "block" : "none";
+	          		if (isCopRole) {
+	          			let cs = p["cop_stats"] || {};
+	          			let catchesEl = document.getElementById("cop_catches__"+curr_persona_name_os);
+	          			if (catchesEl) catchesEl.innerHTML = String(cs["catches"] || 0);
+	          			let takenEl = document.getElementById("cop_taken__"+curr_persona_name_os);
+	          			if (takenEl) takenEl.innerHTML = formatBridgeMoney(cs["total_taken_from_thief"] || 0);
+	          			let confCountEl = document.getElementById("cop_bank_conf_count__"+curr_persona_name_os);
+	          			if (confCountEl) confCountEl.innerHTML = String(cs["bank_confiscations_count"] || 0);
+	          			let confTotalEl = document.getElementById("cop_bank_conf_total__"+curr_persona_name_os);
+	          			if (confTotalEl) confTotalEl.innerHTML = formatBridgeMoney(cs["bank_confiscations_total"] || 0);
+	          		}
 	          		let description_content = p["description"] || "idle@home";
 	          		let split_desc = description_content.split("@");
-	          		document.getElementById("current_action__"+curr_persona_name_os).innerHTML = split_desc[0] || "idle";
-	          		document.getElementById("target_address__"+curr_persona_name_os).innerHTML = split_desc[1] || "home";
-	          		document.getElementById("chat__"+curr_persona_name_os).innerHTML = "<em>None at the moment</em>";
+	          		document.getElementById("current_action__"+curr_persona_name_os).innerHTML = p["current_action"] || split_desc[0] || "idle";
+	          		let balEl = document.getElementById("balance__"+curr_persona_name_os);
+	          		if (balEl) balEl.innerHTML = formatBridgeMoney(p["balance"]);
+	          		let homeEl = document.getElementById("home_storage__"+curr_persona_name_os);
+	          		if (homeEl) homeEl.innerHTML = formatBridgeMoney(p["home_storage"]);
+	          		let lcEl = document.getElementById("lifetime_collected__"+curr_persona_name_os);
+	          		if (lcEl) lcEl.innerHTML = formatBridgeMoney((p["lifetime_collected"] !== undefined && p["lifetime_collected"] !== null) ? p["lifetime_collected"] : 0);
+	          		let llEl = document.getElementById("lifetime_lost__"+curr_persona_name_os);
+	          		if (llEl) llEl.innerHTML = formatBridgeMoney((p["lifetime_lost"] !== undefined && p["lifetime_lost"] !== null) ? p["lifetime_lost"] : 0);
+	          		let lnEl = document.getElementById("lifetime_net__"+curr_persona_name_os);
+	          		if (lnEl) {
+	          			let lnv = p["lifetime_net"];
+	          			if (lnv === undefined || lnv === null) {
+	          				lnv = Number(p["lifetime_collected"] || 0) - Number(p["lifetime_lost"] || 0);
+	          			}
+	          			lnEl.innerHTML = formatBridgeMoney(lnv);
+	          		}
+	          		let flowEl = document.getElementById("flow__"+curr_persona_name_os);
+	          		if (flowEl) flowEl.innerHTML = String(p["flow"] || "No recent financial flow");
+	          		let recentRows = Array.isArray(p["recent"]) ? p["recent"] : [];
+	          		let hasBankPenalty = recentRows.some(function(ev){
+	          			return ev && typeof ev === "object" && ev.type === "bank_zone_confiscation";
+	          		});
+	          		let recentEl = document.getElementById("recent__"+curr_persona_name_os);
+	          		if (recentEl) recentEl.innerHTML = summarizeBridgeRecent(p["recent"]);
+	          		if (hasBankPenalty) {
+	          			if (role_titles[curr_persona_name]) {
+	          				role_titles[curr_persona_name].setText((role_content || roleTitleFromName(curr_persona_name)) + " !PENALTY");
+	          				role_titles[curr_persona_name].setColor("#ff6b8a");
+	          			}
+	          			let currActionEl = document.getElementById("current_action__"+curr_persona_name_os);
+	          			if (currActionEl) currActionEl.innerHTML = "bank_penalty_confiscated";
+	          		} else if (role_titles[curr_persona_name]) {
+	          			role_titles[curr_persona_name].setColor("#f3f4f6");
+	          		}
+	          		let storedRow = document.getElementById("stored_row__"+curr_persona_name_os);
+	          		if (storedRow) {
+	          			let hsNum = Number(p["home_storage"] || 0);
+	          			storedRow.style.display = (hsNum > 1e-12) ? "block" : "none";
+	          		}
+	          		let locEl = document.getElementById("location__"+curr_persona_name_os);
+	          		if (locEl) {
+	          			let dz = (p["dest_zone"] !== undefined && p["dest_zone"] !== null && String(p["dest_zone"]).length) ? String(p["dest_zone"]) : (split_desc[1] || "home");
+	          			locEl.innerHTML = "(" + Math.round(tx) + ", " + Math.round(ty) + ") -> " + dz;
+	          		}
 	          	}
+	          	updateBankPanelFromPersona(payload["persona"]);
 	          }
+	          pollBankTxDiagnosticsIfNeeded(false);
 	          timer = timer_max;
 	        }
 	      });
 	      bridge_xobj.send(JSON.stringify({"step": step, "sim_code": sim_code }));
 	    }
 
+	    // OBEDIENCE MODE: backend is movement authority. bridge_target[name] holds the
+	    // latest server movement[] (pixel x,y). With BRIDGE_DIRECT_SPRITE_POSITION,
+	    // the sprite is placed exactly there each frame (no client interpolation).
 	    for (let i=0; i<Object.keys(personas).length; i++) {
 	    	let name = Object.keys(personas)[i];
 	    	let sprite = personas[name];
 	    	let bubble = pronunciatios[name];
 	    	let title = role_titles[name];
-	    	let tgt = bridge_target[name] || [sprite.x, sprite.y];
-	    	let vel = bridge_velocity[name] || [0.0, 0.0];
-	    	let dest = bridge_destination[name] || tgt;
-	    	let nowMs = performance.now();
-	    	let ageMs = Math.max(0.0, nowMs - (bridge_last_update_ms[name] || nowMs));
-	    	let predictMs = Math.min(ageMs, bridge_predict_ms);
-	    	let predictedX = tgt[0] + vel[0] * predictMs;
-	    	let predictedY = tgt[1] + vel[1] * predictMs;
-	    	if (ageMs > bridge_stale_ms) {
-	    		predictedX = predictedX + (dest[0] - predictedX) * 0.38;
-	    		predictedY = predictedY + (dest[1] - predictedY) * 0.38;
-	    	}
 
-	    	bridge_recompute_path(name, sprite.x, sprite.y, dest[0], dest[1]);
-	    	let path = bridge_paths[name] || [];
-	    	let navTargetX = predictedX, navTargetY = predictedY;
-	    	if (path.length > 0) {
-	    		let wp = path[0];
-	    		let wdx = wp[0] - sprite.x, wdy = wp[1] - sprite.y;
-	    		if (Math.abs(wdx) <= 8 && Math.abs(wdy) <= 8) {
-	    			path.shift();
-	    			bridge_paths[name] = path;
-	    			if (path.length > 0) wp = path[0];
+	    	let srv = bridge_target[name] || [sprite.x, sprite.y];
+	    	if (BRIDGE_DIRECT_SPRITE_POSITION) {
+	    		let prev = bridge_last_sprite_xy[name] || [sprite.x, sprite.y];
+	    		sprite.setPosition(srv[0], srv[1]);
+	    		let rdx = srv[0] - prev[0];
+	    		let rdy = srv[1] - prev[1];
+	    		bridge_last_sprite_xy[name] = [srv[0], srv[1]];
+	    		if (Math.abs(rdx) + Math.abs(rdy) > 0.35) {
+	    			if (Math.abs(rdx) >= Math.abs(rdy)) anims_direction = (rdx > 0) ? "r" : "l";
+	    			else anims_direction = (rdy > 0) ? "d" : "u";
+	    			pre_anims_direction_dict[name] = anims_direction;
+	    			if (anims_direction == "l") sprite.anims.play("misa-left-walk", true);
+	    			else if (anims_direction == "r") sprite.anims.play("misa-right-walk", true);
+	    			else if (anims_direction == "u") sprite.anims.play("misa-back-walk", true);
+	    			else if (anims_direction == "d") sprite.anims.play("misa-front-walk", true);
+	    		} else {
+	    			sprite.anims.stop();
+	    			if (pre_anims_direction_dict[name] == "l") sprite.setTexture("atlas", "misa-left");
+	    			else if (pre_anims_direction_dict[name] == "r") sprite.setTexture("atlas", "misa-right");
+	    			else if (pre_anims_direction_dict[name] == "u") sprite.setTexture("atlas", "misa-back");
+	    			else if (pre_anims_direction_dict[name] == "d") sprite.setTexture("atlas", "misa-front");
 	    		}
-	    		if (path.length > 0) { navTargetX = wp[0]; navTargetY = wp[1]; }
-	    	}
-
-	    	let dx = navTargetX - sprite.x, dy = navTargetY - sprite.y;
-	    	if (Math.abs(dx) > bridge_arrival_epsilon || Math.abs(dy) > bridge_arrival_epsilon) {
-	    		let dist = Math.sqrt((dx * dx) + (dy * dy));
-	    		let desiredStep = Math.min(bridge_steady_step, dist);
-	    		let stepX = 0.0, stepY = 0.0;
-	    		if (dist > 0.0001) { stepX = (dx / dist) * desiredStep; stepY = (dy / dist) * desiredStep; }
-	    		stepX = Math.max(-bridge_max_step, Math.min(bridge_max_step, stepX));
-	    		stepY = Math.max(-bridge_max_step, Math.min(bridge_max_step, stepY));
-	    		let nx = sprite.x + stepX, ny = sprite.y + stepY;
-	    		let moved = false;
-	    		if (bridge_can_occupy(nx, ny)) { sprite.setPosition(nx, ny); moved = true; }
-	    		else if (bridge_can_occupy(nx, sprite.y)) { sprite.setPosition(nx, sprite.y); moved = true; }
-	    		else if (bridge_can_occupy(sprite.x, ny)) { sprite.setPosition(sprite.x, ny); moved = true; }
-	    		if (!moved) anims_direction = "";
-	    		else if (Math.abs(dx) >= Math.abs(dy)) anims_direction = (dx > 0) ? "r" : "l";
-	    		else anims_direction = (dy > 0) ? "d" : "u";
-	    		pre_anims_direction_dict[name] = anims_direction;
-	    		if (anims_direction == "l") sprite.anims.play("misa-left-walk", true);
-	    		else if (anims_direction == "r") sprite.anims.play("misa-right-walk", true);
-	    		else if (anims_direction == "u") sprite.anims.play("misa-back-walk", true);
-	    		else if (anims_direction == "d") sprite.anims.play("misa-front-walk", true);
 	    	} else {
-	    		sprite.anims.stop();
-	    		if (pre_anims_direction_dict[name] == "l") sprite.setTexture("atlas", "misa-left");else
-			    if (pre_anims_direction_dict[name] == "r") sprite.setTexture("atlas", "misa-right");else
-			    if (pre_anims_direction_dict[name] == "u") sprite.setTexture("atlas", "misa-back");else
-			    if (pre_anims_direction_dict[name] == "d") sprite.setTexture("atlas", "misa-front");
+	    		let dx = srv[0] - sprite.x;
+	    		let dy = srv[1] - sprite.y;
+	    		let dist = Math.sqrt((dx * dx) + (dy * dy));
+	    		if (dist > 0.25) {
+	    			let step;
+	    			if (dist > 128) { step = dist; }
+	    			else { step = Math.min(bridge_steady_step, dist); }
+	    			let nx = sprite.x + (dx / dist) * step;
+	    			let ny = sprite.y + (dy / dist) * step;
+	    			sprite.setPosition(nx, ny);
+	    			if (Math.abs(dx) >= Math.abs(dy)) anims_direction = (dx > 0) ? "r" : "l";
+	    			else anims_direction = (dy > 0) ? "d" : "u";
+	    			pre_anims_direction_dict[name] = anims_direction;
+	    			if (anims_direction == "l") sprite.anims.play("misa-left-walk", true);
+	    			else if (anims_direction == "r") sprite.anims.play("misa-right-walk", true);
+	    			else if (anims_direction == "u") sprite.anims.play("misa-back-walk", true);
+	    			else if (anims_direction == "d") sprite.anims.play("misa-front-walk", true);
+	    		} else {
+	    			sprite.anims.stop();
+	    			if (pre_anims_direction_dict[name] == "l") sprite.setTexture("atlas", "misa-left");
+	    			else if (pre_anims_direction_dict[name] == "r") sprite.setTexture("atlas", "misa-right");
+	    			else if (pre_anims_direction_dict[name] == "u") sprite.setTexture("atlas", "misa-back");
+	    			else if (pre_anims_direction_dict[name] == "d") sprite.setTexture("atlas", "misa-front");
+	    		}
 	    	}
 	    	bubble.x = sprite.x - 6;
 	    	bubble.y = sprite.y - 42 - 32;
 	    	if (title) {
 	    		title.x = sprite.x;
 	    		title.y = sprite.y - 78 - 32;
+	    	}
+	    	let tl = bridge_trace_labels[name];
+	    	if (tl) {
+	    		let goalPt = bridge_destination[name] || [sprite.x, sprite.y];
+	    		let err = Math.round(Math.hypot(sprite.x - goalPt[0], sprite.y - goalPt[1]));
+	    		let srvLine = bridge_last_srv_line[name] || "";
+	    		tl.setText(srvLine + "\ncli " + Math.round(sprite.x) + "," + Math.round(sprite.y) + " err " + err);
+	    		tl.x = sprite.x;
+	    		tl.y = sprite.y - 96 - 32;
 	    	}
 	    }
 
@@ -951,9 +1233,12 @@
 		      }
 	        // action_description += description_content + "<br>";
 
-	        document.getElementById("current_action__"+curr_persona_name_os).innerHTML = description_content.split("@")[0];
-	        document.getElementById("target_address__"+curr_persona_name_os).innerHTML = description_content.split("@")[1];
-	        document.getElementById("chat__"+curr_persona_name_os).innerHTML = chat_content;
+	        let actionEl = document.getElementById("current_action__"+curr_persona_name_os);
+	        if (actionEl) actionEl.innerHTML = description_content.split("@")[0];
+	        let locationEl = document.getElementById("location__"+curr_persona_name_os);
+	        if (locationEl) locationEl.innerHTML = description_content.split("@")[1];
+	        let chatEl = document.getElementById("chat__"+curr_persona_name_os);
+	        if (chatEl) chatEl.innerHTML = chat_content;
 	      }
 	      
 	    }
@@ -965,4 +1250,74 @@
 	// Control button binders
 	var play_button=document.getElementById("play_button");
 	var pause_button=document.getElementById("pause_button");
+var demo_cycle_button=document.getElementById("demo_cycle_button");
+var demo_cycle_status=document.getElementById("demo_cycle_status");
+var bank_reset_button=document.getElementById("bank_reset_button");
+var bank_reset_status=document.getElementById("bank_reset_status");
+	var game;
+
+if (demo_cycle_button) {
+	demo_cycle_button.onclick = function() {
+		demo_cycle_button.disabled = true;
+		if (demo_cycle_status) demo_cycle_status.innerHTML = "Running scenario...";
+		var req = new XMLHttpRequest();
+		req.overrideMimeType("application/json");
+		req.open("POST", "{% url 'bridge_force_cop_cycle' %}?steps=40", true);
+		req.addEventListener("load", function() {
+			demo_cycle_button.disabled = false;
+			try {
+				let payload = JSON.parse(req.responseText || "{}");
+				if (req.status === 200 && payload.ok) {
+					if (demo_cycle_status) demo_cycle_status.innerHTML = "Scenario started.";
+				} else {
+					if (demo_cycle_status) demo_cycle_status.innerHTML = "Scenario failed.";
+				}
+			} catch (e) {
+				if (demo_cycle_status) demo_cycle_status.innerHTML = "Scenario failed.";
+			}
+		});
+		req.addEventListener("error", function() {
+			demo_cycle_button.disabled = false;
+			if (demo_cycle_status) demo_cycle_status.innerHTML = "Scenario failed.";
+		});
+		req.send("{}");
+	};
+}
+
+if (bank_reset_button) {
+	bank_reset_button.onclick = function() {
+		bank_reset_button.disabled = true;
+		if (bank_reset_status) bank_reset_status.innerHTML = "Resetting baseline economy...";
+		var req = new XMLHttpRequest();
+		req.overrideMimeType("application/json");
+		req.open("POST", "{% url 'bridge_reset_economy' %}", true);
+		req.addEventListener("load", function() {
+			bank_reset_button.disabled = false;
+			try {
+				let payload = JSON.parse(req.responseText || "{}");
+				if (req.status === 200 && payload.ok) {
+					if (bank_reset_status) bank_reset_status.innerHTML = "Reset complete: baseline population restored.";
+					if (demo_cycle_status) demo_cycle_status.innerHTML = "Ready";
+					resetFinanceCardsToZero();
+					pollBankTxDiagnosticsIfNeeded(true);
+				} else {
+					if (bank_reset_status) bank_reset_status.innerHTML = "Reset failed.";
+				}
+			} catch (e) {
+				if (bank_reset_status) bank_reset_status.innerHTML = "Reset failed.";
+			}
+		});
+		req.addEventListener("error", function() {
+			bank_reset_button.disabled = false;
+			if (bank_reset_status) bank_reset_status.innerHTML = "Reset failed.";
+		});
+		req.send("{}");
+	};
+}
+
+pollBankTxDiagnosticsIfNeeded(true);
+
+	// FORCE PHASER START (engine-only test): no async boot, no spawn guards.
+	console.log("FORCING PHASER START");
+	game = new Phaser.Game(config);
 </script>
