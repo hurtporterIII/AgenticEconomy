@@ -25,3 +25,19 @@
 - Provide one-click Gemini/Featherless starter templates with consistent response schemas.
 - Add official guidance for micro-transaction economics benchmarks (cost per action tiers).
 - Improve hackathon submission templates for proof artifacts (tx sample, count screenshot, API trace).
+
+---
+
+## Circle / Arc (hackathon feedback template — fill before submit)
+
+**What worked well**
+
+- (Example: developer-controlled wallet client initialization, testnet faucet behavior, error messages when rate-limited.)
+
+**What was confusing or costly in time**
+
+- (Example: which env vars are mandatory vs optional for a minimal Arc USDC transfer proof.)
+
+**One concrete improvement**
+
+- (Example: a single “happy path” curl sequence in official docs that returns `tx_hash` on Arc testnet within one page.)

@@ -10,18 +10,49 @@ AgenticEconomy is a live multi-agent economic simulation where autonomous agents
 - Arc settlement integration that returns verifiable `tx_hash` values for valid on-chain actions.
 - User-driven agent spawning with explicit role selection and a single global total-agent cap.
 
-## Demo Link
+## Hackathon submission (lablab.ai — judges)
 
-- Demo video: `ADD_YOUR_DEMO_LINK_HERE`
+This section is written so a judge can decide quickly **what is already evidenced in-repo**, what to **verify live**, and what the **author still attaches** (video, screenshots) after the demo run is stable.
 
-## How To Run
+### What you are judging
+
+- **Application of technology:** Circle nanopayments / developer-controlled wallets + Arc testnet USDC settlement, tied to a live multi-agent economy loop.
+- **Presentation:** short demo video + clear README path to run and observe.
+- **Business value:** many small economic actions per session at **sub-cent effective pricing** (see metrics below).
+- **Originality:** hybrid simulation — high-frequency in-sim intents with **sampled or throttled real settlement** so agents keep moving when limits or gas apply.
+
+### Requirements checklist (official themes)
+
+| Requirement | Where to verify | Status in this repo |
+|-------------|-----------------|---------------------|
+| **Real per-action pricing (≤ $0.01)** | `GET http://127.0.0.1:8000/api/tx/diagnostics` → `metrics.cost_per_action` (also surfaced in the **Bank Panel** in bridge Smallville UI) | **Code + live endpoint.** Judges should capture one JSON response or screenshot during the demo. |
+| **50+ on-chain transactions in demo** | Same diagnostics: `diagnostics.real_tx_count` (and explorer hashes from events / `last_tx_hash`) | **Mechanism in code; count is runtime.** Author will attach video + screenshot showing count ≥ 50 for the final submission cut. |
+| **Transaction-flow video proof** | Author-hosted link (YouTube / Loom / Drive) | **Placeholder below** — add link when the program is stable. |
+| **Margin explanation (why traditional gas fails)** | README subsection below | **Documented below.** |
+| **Circle product feedback** | `docs/feedback.md` | **In repo** — expand with concrete API notes after your final run. |
+
+### Demo video (you add this)
+
+- **Demo video:** `ADD_YOUR_DEMO_LINK_HERE` (replace with public URL before submission)
+
+**Suggested 90-second flow for recording:** (1) show `start_smallville.ps1` or running services, (2) open bridge map, (3) point at **Bank Panel** (balances + tx health), (4) hit **Start Scenario** / run until diagnostics show **50+** real txs, (5) paste one `tx_hash` into Arc explorer.
+
+### Margin explanation (gas vs this model)
+
+Traditional L1/L2 retail economics break when **every micro-action** pays a **full transaction fee** (or waits for fee markets). A town simulation may emit **hundreds to thousands** of value movements per minute across workers, intel sales, recoveries, and settlements. If each movement required a separate user-paid gas blob at typical testnet/mainnet **cents-to-dollars** scale, either (a) the simulation stops because agents cannot afford to act, or (b) you **batch/coalesce** and lose per-action pricing fidelity.
+
+This project uses **Circle’s nanopayment-style flows on Arc (USDC)** so many intents can be priced near **sub-cent** levels while the runtime still **samples** or **throttles** how many become full on-chain writes when limits hit — see `SETTLEMENT_STRATEGY` and `/api/tx/diagnostics` for live behavior.
+
+### How To Run
 
 1. Backend dependencies (use the same interpreter as `start_smallville.ps1`):
 ```bash
 C:\Python314\python.exe -m pip install -r backend/requirements.txt
 ```
+On other machines, use your Python 3.11+ binary instead of `C:\Python314\python.exe`.
+
 Do not install `circle-sdk` for this project; backend runtime imports `circle.web3`, which is provided by `circle-developer-controlled-wallets`.
-2. Configure environment in [`.env`](C:\Users\Admin\Desktop\HACKATHON\COmpatetion Folder\AgenticEconomy\.env):
+2. Configure environment in repo-root `.env` (create from your secrets; never commit the file):
 ```env
 CIRCLE_API_KEY=...
 CIRCLE_ENTITY_SECRET=...
@@ -203,12 +234,16 @@ What judges can verify live:
 - Autonomous roles: workers, thieves, cops, banker/bank.
 - Trait-based individuality: same-role agents are not clones.
 - Policy-to-behavior loop: `decline`, `police_state`, `growth`, `balanced`, `bootstrapping`.
-- Every meaningful action produces a transaction attempt and event record with `tx_hash`.
-- Full observability stack: event feed, metrics, story ticker, per-agent intent bars, regime narration, replay export.
-- Interactive controls: spawn population, tune doctrine, force scenarios, change speed, export replay.
+- Economic actions produce transaction attempts; real Arc settlement returns verifiable `tx_hash` where the rail succeeds (see `/api/tx/diagnostics` for live vs simulated counts).
+- **Bridge Smallville UI:** per-persona cards, **Bank Panel** (worker/cop ledger + virtual totals + tx health), **Reset Economy**, **Start Scenario** demo helper.
+- Optional Vite dashboard (`frontend/`) for richer charts when running `npm run dev`.
 
 Core claim:
 
 `Every decision has a price, that price changes behavior, and that behavior reshapes the economy in real time.`
 
-See [Demo Script And Slide Notes](C:\Users\Admin\Desktop\HACKATHON\COmpatetion Folder\AgenticEconomy\docs\demo.md) for speaking flow.
+See [Demo script and slide notes](docs/demo.md) for speaking flow (expand with your final narration).
+
+### Product feedback (Circle / hackathon form)
+
+Structured notes live in [`docs/feedback.md`](docs/feedback.md). Before you submit, add a short section with **what you liked**, **what was confusing**, and **one concrete API or docs improvement** from your integration experience — that is the kind of detail hackathon organizers reuse.
