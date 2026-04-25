@@ -13,6 +13,12 @@ Live simulation where autonomous AI agents earn, steal, buy/sell intelligence, r
 | Arc + USDC settlement              | ✅ Passed | Fully implemented |
 | Agent-to-agent economic loop       | ✅ Passed | Workers, thieves, cops, spies, bankers |
 
+### Margin Explanation
+
+Traditional gas fees make high-frequency micro-transactions uneconomical because fee overhead can exceed the value being moved per action.
+
+AgenticEconomy uses Arc + USDC settlement with sub-cent action pricing so each action can remain economically meaningful while still being verifiable on-chain.
+
 **Public Demo URL**  
 -> [PASTE YOUR PUBLIC UI URL HERE]
 
