@@ -69,8 +69,19 @@ def _arrived(wx: float, wy: float, pt: tuple[float, float]) -> bool:
 
 
 def _first_bank_id(state) -> str | None:
+    # Prefer explicit bank entity when present.
     for ent in state.setdefault("entities", {}).values():
         if ent.get("type") == "bank" and ent.get("id"):
+            return ent.get("id")
+    # Demo baseline often runs with banker + spy and no separate bank entity.
+    # Fallback to a banker role (excluding spy persona) so worker deposit phase
+    # does not silently skip.
+    for ent in state.setdefault("entities", {}).values():
+        if ent.get("type") != "banker":
+            continue
+        if str(ent.get("persona_role", "")).strip().lower() == "spy":
+            continue
+        if ent.get("id"):
             return ent.get("id")
     return None
 
