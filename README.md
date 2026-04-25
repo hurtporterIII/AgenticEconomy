@@ -49,12 +49,6 @@ powershell -ExecutionPolicy Bypass -File ".\stop_smallville.ps1"
 - On-chain settlement with Arc + USDC
 - Live bank panel showing simulation state + on-chain transaction stream
 
-### Margin Explanation
-
-Traditional gas fees make high-frequency micro-transactions uneconomical because fee overhead can exceed the value being moved per action.
-
-AgenticEconomy uses Arc + USDC settlement with sub-cent action pricing so each action can remain economically meaningful while still being verifiable on-chain.
-
 ### On-Chain Proof
 
 - Explorer: [Arc Testnet Explorer](https://testnet.arcscan.app/)
