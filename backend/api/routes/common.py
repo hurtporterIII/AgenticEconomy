@@ -19,7 +19,7 @@ DEFAULT_RESET_POPULATION = {
     "bankers": 1,
     "spies": 1,
     "thieves": 1,
-    "banks": 0,
+    "banks": 1,
 }
 DEFAULT_RESET_BALANCES = {
     "worker": 1.0,

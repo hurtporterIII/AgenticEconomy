@@ -165,20 +165,20 @@ try {
   }
 
   $needsReset = (
-    ($entityCount -ne 10) -or
+    ($entityCount -ne 11) -or
     ($roleCounts.worker -ne 6) -or
     ($roleCounts.cop -ne 1) -or
     ($roleCounts.banker -ne 1) -or
     ($roleCounts.spy -ne 1) -or
     ($roleCounts.thief -ne 1) -or
-    ($roleCounts.bank -ne 0)
+    ($roleCounts.bank -ne 1)
   )
 
   if ($needsReset) {
     Invoke-RestMethod -Uri "http://127.0.0.1:$backendPort/api/demo/reset-economy" `
       -Method Post `
       -TimeoutSec 8 | Out-Null
-    Write-Host "Population normalized to 6 workers, 1 cop, 1 banker, 1 spy, 1 thief."
+    Write-Host "Population normalized to 6 workers, 1 cop, 1 banker, 1 spy, 1 thief, 1 bank."
   }
 } catch {}
 

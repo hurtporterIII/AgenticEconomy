@@ -69,19 +69,8 @@ def _arrived(wx: float, wy: float, pt: tuple[float, float]) -> bool:
 
 
 def _first_bank_id(state) -> str | None:
-    # Prefer explicit bank entity when present.
     for ent in state.setdefault("entities", {}).values():
         if ent.get("type") == "bank" and ent.get("id"):
-            return ent.get("id")
-    # Demo baseline often runs with banker + spy and no separate bank entity.
-    # Fallback to a banker role (excluding spy persona) so worker deposit phase
-    # does not silently skip.
-    for ent in state.setdefault("entities", {}).values():
-        if ent.get("type") != "banker":
-            continue
-        if str(ent.get("persona_role", "")).strip().lower() == "spy":
-            continue
-        if ent.get("id"):
             return ent.get("id")
     return None
 
@@ -156,15 +145,13 @@ def handle_worker(worker, state):
 
         bank_id = _first_bank_id(state)
         if bank_id is None:
-            # No bank to deposit into — just advance the loop.
-            worker["worker_shift_phase"] = SHIFT_TO_HOME
+            # Deposit is mandatory in the worker cycle.
+            # If bank is unavailable, wait in bank phase.
             return
 
         liquid = float(balances.get(worker["id"], 0.0) or 0.0)
         if liquid < DEPOSIT:
-            # Guard: never go negative. Advance without logging a bogus
-            # deposit; the cycle will self-correct on the next earn.
-            worker["worker_shift_phase"] = SHIFT_TO_HOME
+            # Deposit is mandatory; do not move to home stash without it.
             return
 
         out_tx = debit(worker["id"], DEPOSIT, None, count_lifetime_lost=False)
