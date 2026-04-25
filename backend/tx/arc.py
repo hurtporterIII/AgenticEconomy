@@ -11,7 +11,9 @@ from core.state import state as shared_state
 _repo_root = Path(__file__).resolve().parents[2]
 _env_file = _repo_root / ".env"
 if _env_file.is_file():
-    load_dotenv(_env_file, override=True)
+    # Preserve process-level env vars (set by start scripts) so demo/runtime
+    # tuning can safely override .env defaults.
+    load_dotenv(_env_file, override=False)
 if os.getenv("AGENTIC_SIM_ONLY", "").strip().lower() in {"1", "true", "yes", "on"}:
     os.environ["TX_REAL_MODE"] = "off"
     os.environ["SETTLEMENT_STRATEGY"] = "off"

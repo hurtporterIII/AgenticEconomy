@@ -112,7 +112,7 @@ if ($forceRestart -and (Test-PortListening $backendPort)) {
 if (-not (Test-PortListening $backendPort)) {
   if ($SimOnly) {
     # Sim-only: clamp after `.env` load in Python (see AGENTIC_SIM_ONLY in main.py / arc.py).
-    $backendCmd = "`$env:AGENTIC_SIM_ONLY='1'; `$env:CIRCLE_POLL_ATTEMPTS='1'; `$env:FORCE_SINGLE_TARGET='0'; `$env:AUTO_TICK_ENABLED='1'; `$env:AUTO_TICK_MS='100'; & `"$backendPythonExe`" -m uvicorn main:app --host 127.0.0.1 --port $backendPort"
+    $backendCmd = "`$env:AGENTIC_SIM_ONLY='1'; `$env:FORCE_SINGLE_TARGET='0'; `$env:AUTO_TICK_ENABLED='1'; `$env:AUTO_TICK_MS='100'; & `"$backendPythonExe`" -m uvicorn main:app --host 127.0.0.1 --port $backendPort"
   } else {
     # Normal mode: allow real settlement according to .env / runtime config.
     # AUTO_TICK_*: background sim loop in main.py — keep Django from also stepping every poll (see SMALLVILLE_BRIDGE_STEP_ON_POLL below).
@@ -137,6 +137,19 @@ try {
 } catch {
   throw ("Port $backendPort is listening but is not the AgenticEconomy bridge from this repo " +
     "(GET /api/bridge/manifest failed or wrong revision). Stop whatever owns the port, then re-run this script. Details: $_")
+}
+
+# 1c) API surface check: ensure this backend includes the latest tx session endpoint.
+# If this fails, :8000 is likely an older checkout/process and reset behavior will be inconsistent.
+try {
+  $openapi = Invoke-RestMethod -Uri "http://127.0.0.1:$backendPort/openapi.json" -Method Get -TimeoutSec 6
+  $paths = $openapi.paths
+  if (-not $paths -or -not ($paths.PSObject.Properties.Name -contains "/api/tx/session/reset")) {
+    throw "Missing /api/tx/session/reset route"
+  }
+} catch {
+  throw ("Port $backendPort is serving an older backend API surface (missing /api/tx/session/reset). " +
+    "Stop stale processes and restart from this repo. Details: $_")
 }
 
 # 2) Enforce stable demo population (prevents economy collapse from over-spawn)

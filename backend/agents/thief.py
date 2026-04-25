@@ -55,9 +55,20 @@ def handle_thief(thief, state):
             if bank_targets else -0.8
         ),
         "steal_agent": 0.1 + aggression * 0.4 + stealth * 0.2 if non_bank_targets else -0.8,
-        "lay_low": 0.25 + cops_targeting * 0.25 - aggression * 0.1,
+        # Anti-stall: "lay_low" should be situational (safety when pressured),
+        # not the dominant default action for long stretches.
+        "lay_low": -0.35 + cops_targeting * 0.22 - aggression * 0.05,
         "deposit_bank": 0.35 + (thief_balance - 8.0) * 0.06 if bank_targets and thief_balance > 8.0 else -0.7,
     }
+    # If historical learning pushed lay_low too high, decay it when not under
+    # active pressure so movement/exchanges recover.
+    policy = thief.setdefault("policy", {})
+    weights = policy.setdefault("weights", {})
+    if "lay_low" in weights and cops_targeting <= 0:
+        try:
+            weights["lay_low"] = max(1.0, float(weights.get("lay_low", 1.0)) * 0.94)
+        except Exception:
+            weights["lay_low"] = 1.0
     action, action_weights = choose_action(thief, action_utilities, state=state, role="thief")
 
     # ------------------------------------------------------------------
@@ -84,7 +95,7 @@ def handle_thief(thief, state):
         reinforce_action(
             thief,
             "lay_low",
-            0.25 if cops_targeting > 0 else 0.05,
+            0.02 if cops_targeting > 0 else -0.10,
             state=state,
             role="thief",
             context={"regime": regime, "cops_targeting": cops_targeting},

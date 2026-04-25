@@ -165,7 +165,7 @@ def _pick_patrol_point_in_bbox(entity, bbox, tick, hold_ticks=16, anchor=None, a
     else:
         nx = random.uniform(min_x, max_x)
         ny = random.uniform(min_y, max_y)
-    entity["home_patrol_until_tick"] = int(tick) + max(8, int(hold_ticks))
+    entity["home_patrol_until_tick"] = int(tick) + max(2, int(hold_ticks))
     return nx, ny
 
 
@@ -538,11 +538,41 @@ def _set_behavior_target(entity, entities, shared):
         return
 
     if entity_type == "thief":
-        thief_zone = _home_zone(shared, entity)
-        entity["target_x"], entity["target_y"] = _clamp_world(
-            thief_zone[0] + random.uniform(-80, 80),
-            thief_zone[1] + random.uniform(-55, 55),
-        )
+        # Keep thief roaming smooth/readable when queue is empty.
+        # Old behavior re-rolled random target every tick, which caused
+        # visible jiggle/pacing in place and long "looks stuck" intervals.
+        home_hub_key = "thief_home"
+        default_home = _hub_point(shared, "thief_home", "center", default=THIEF_ZONE)
+        hubs = _ensure_role_hubs(shared)
+        home_bid = str(hubs.get(home_hub_key, ROLE_HUB_DEFAULTS.get(home_hub_key, ""))).strip().upper()
+        home_bbox = _get_building_bbox(home_bid, default_center=default_home, pad_px=22.0)
+
+        ex = float(entity.get("x", default_home[0]) or default_home[0])
+        ey = float(entity.get("y", default_home[1]) or default_home[1])
+        curr_tx = float(entity.get("target_x", ex) or ex)
+        curr_ty = float(entity.get("target_y", ey) or ey)
+        hold_until = int(entity.get("_thief_patrol_hold_until_tick", -1) or -1)
+
+        # If displaced outside home patrol bounds, recover back in-bounds first.
+        if not _point_in_bbox(ex, ey, home_bbox):
+            rx, ry = _clamp_to_bbox(default_home[0], default_home[1], home_bbox)
+            entity["target_x"], entity["target_y"] = rx, ry
+            entity["_thief_patrol_hold_until_tick"] = int(tick) + 2
+            return
+
+        curr_inside = _point_in_bbox(curr_tx, curr_ty, home_bbox)
+        if tick < hold_until and curr_inside:
+            entity["target_x"], entity["target_y"] = curr_tx, curr_ty
+            return
+
+        if (not curr_inside) or _near(entity, (curr_tx, curr_ty), 20.0):
+            npx, npy = _next_patrol_point_in_bbox(entity, home_bbox)
+            entity["target_x"], entity["target_y"] = _clamp_to_bbox(npx, npy, home_bbox)
+            entity["_thief_patrol_hold_until_tick"] = int(tick) + 2
+            return
+
+        # Keep current patrol target until arrival.
+        entity["target_x"], entity["target_y"] = curr_tx, curr_ty
         return
 
     if entity_type == "cop":
@@ -566,7 +596,7 @@ def _set_behavior_target(entity, entities, shared):
 
         if _near(entity, (px, py), 36.0):
             entity["_cop_city_patrol_idx"] = idx + 1
-            entity["_cop_patrol_hold_until_tick"] = int(tick) + 16
+            entity["_cop_patrol_hold_until_tick"] = int(tick) + 4
             npx, npy = patrol_points[(idx + 1) % len(patrol_points)]
             entity["target_x"], entity["target_y"] = _clamp_world(npx, npy)
             return

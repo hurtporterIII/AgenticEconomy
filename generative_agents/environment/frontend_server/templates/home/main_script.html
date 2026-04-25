@@ -534,6 +534,15 @@
 			let tile = collisionsLayer.getTileAt(tx, ty, false);
 			if (tile && tile.collides) return true;
 		}
+		// Additional rigidity: treat wall tiles as blocked unless they are a
+		// recognized doorway connecting interior <-> exterior.
+		if (bridge_wall_layer) {
+			let wallTile = bridge_wall_layer.getTileAt(tx, ty, false);
+			if (wallTile && wallTile.index !== -1) {
+				let isDoor = bridge_allow_wall_doors && bridge_is_door_tile(tx, ty);
+				if (!isDoor) return true;
+			}
+		}
 		return false;
 	}
 
@@ -823,8 +832,10 @@
 	  // OLD NOTE: Create a sprite with physics enabled via the physics system. 
 	  // The image  used for the sprite has a bit of whitespace, so I'm using 
 	  // setSize & setOffset to control the size of the player's body.
+	  const centerX = Math.floor(map.widthInPixels / 2);
+	  const centerY = Math.floor(map.heightInPixels / 2);
 	  player = this.physics.add.
-	                sprite(800, 288, "atlas", "misa-front").
+	                sprite(centerX, centerY, "atlas", "misa-front").
 	                setSize(30, 40).
 	                setOffset(0, 0);
 	  player.setDepth(-1);
@@ -1127,23 +1138,56 @@
 	    			else if (pre_anims_direction_dict[name] == "d") sprite.setTexture("atlas", "misa-front");
 	    		}
 	    	} else {
-	    		let dx = srv[0] - sprite.x;
-	    		let dy = srv[1] - sprite.y;
+	    		// Follow backend-authoritative live position only.
+	    		// Steering to destination (dest_x/dest_y) here causes local jitter
+	    		// when destination state holds/changes while backend sprite is idle.
+	    		let goalPt = bridge_destination[name] || srv;
+	    		let moveTarget = srv;
+	    		let dx = moveTarget[0] - sprite.x;
+	    		let dy = moveTarget[1] - sprite.y;
 	    		let dist = Math.sqrt((dx * dx) + (dy * dy));
 	    		if (dist > 0.25) {
 	    			let step = bridge_steady_step;
 	    			if (dist > 64) step = bridge_catchup_step;
 	    			step = Math.min(step, dist);
+	    			let prevX = sprite.x;
+	    			let prevY = sprite.y;
 	    			let nx = sprite.x + (dx / dist) * step;
 	    			let ny = sprite.y + (dy / dist) * step;
-	    			sprite.setPosition(nx, ny);
-	    			if (Math.abs(dx) >= Math.abs(dy)) anims_direction = (dx > 0) ? "r" : "l";
-	    			else anims_direction = (dy > 0) ? "d" : "u";
-	    			pre_anims_direction_dict[name] = anims_direction;
-	    			if (anims_direction == "l") sprite.anims.play("misa-left-walk", true);
-	    			else if (anims_direction == "r") sprite.anims.play("misa-right-walk", true);
-	    			else if (anims_direction == "u") sprite.anims.play("misa-back-walk", true);
-	    			else if (anims_direction == "d") sprite.anims.play("misa-front-walk", true);
+	    			if (bridge_can_occupy(nx, ny)) {
+	    				sprite.setPosition(nx, ny);
+	    			} else {
+	    				let moved = false;
+	    				if (bridge_can_occupy(nx, sprite.y)) {
+	    					sprite.x = nx;
+	    					moved = true;
+	    				}
+	    				if (bridge_can_occupy(sprite.x, ny)) {
+	    					sprite.y = ny;
+	    					moved = true;
+	    				}
+	    				if (!moved) {
+	    					// Keep backend as source of truth; don't local-repath toward
+	    					// destination because that can reintroduce jiggle at holds.
+	    				}
+	    			}
+	    			let mdx = sprite.x - prevX;
+	    			let mdy = sprite.y - prevY;
+	    			if (Math.abs(mdx) + Math.abs(mdy) > 0.05) {
+	    				if (Math.abs(mdx) >= Math.abs(mdy)) anims_direction = (mdx > 0) ? "r" : "l";
+	    				else anims_direction = (mdy > 0) ? "d" : "u";
+	    				pre_anims_direction_dict[name] = anims_direction;
+	    				if (anims_direction == "l") sprite.anims.play("misa-left-walk", true);
+	    				else if (anims_direction == "r") sprite.anims.play("misa-right-walk", true);
+	    				else if (anims_direction == "u") sprite.anims.play("misa-back-walk", true);
+	    				else if (anims_direction == "d") sprite.anims.play("misa-front-walk", true);
+	    			} else {
+	    				sprite.anims.stop();
+	    				if (pre_anims_direction_dict[name] == "l") sprite.setTexture("atlas", "misa-left");
+	    				else if (pre_anims_direction_dict[name] == "r") sprite.setTexture("atlas", "misa-right");
+	    				else if (pre_anims_direction_dict[name] == "u") sprite.setTexture("atlas", "misa-back");
+	    				else if (pre_anims_direction_dict[name] == "d") sprite.setTexture("atlas", "misa-front");
+	    			}
 	    		} else {
 	    			sprite.anims.stop();
 	    			if (pre_anims_direction_dict[name] == "l") sprite.setTexture("atlas", "misa-left");
@@ -1422,7 +1466,8 @@ if (bank_reset_button) {
 				if (req.status === 200 && payload.ok) {
 					if (bank_reset_status) bank_reset_status.innerHTML = "Reset complete: simulation baseline restored (on-chain history preserved).";
 					if (demo_cycle_status) demo_cycle_status.innerHTML = "Ready";
-					resetFinanceCardsToZero();
+					// Keep last visible values until fresh bridge payload arrives to avoid
+					// looking like ledger data was wiped by simulation reset.
 					pollBankTxDiagnosticsIfNeeded(true);
 				} else {
 					if (bank_reset_status) bank_reset_status.innerHTML = "Reset failed.";

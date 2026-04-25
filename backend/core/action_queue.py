@@ -45,12 +45,17 @@ _MAX_QUEUE_LEN = 24
 #                     "teleport to next target" snap.
 # _MICRO_PAUSE_TICKS  injected between two back-to-back moves if the enqueue
 #                     didn't already leave a wait between them.
-_PAUSE_DURATION = 1.0
-_ARRIVAL_HOLD_TICKS = 2
-_MICRO_PAUSE_TICKS = 0.5
+_PAUSE_DURATION = 0.1
+_ARRIVAL_HOLD_TICKS = 0
+_MICRO_PAUSE_TICKS = 0.0
 # Visual interaction holds (ticks). Auto-tick default is ~250ms, so:
 # 8 ticks ≈ 2 seconds, enough to read "interaction" on screen.
-_INTERACTION_HOLD_TICKS = 8.0
+_INTERACTION_HOLD_TICKS = 0.5
+# Soft caps to avoid long stale behavior chains (especially thief/cops).
+# When an entity is already busy with several queued actions, newer events are
+# still marked consumed but we skip enqueue to keep movement responsive.
+_THIEF_QUEUE_SOFT_CAP = 8
+_COP_QUEUE_SOFT_CAP = 8
 
 
 def _entity(state: dict, entity_id: str | None) -> dict | None:
@@ -70,6 +75,15 @@ def _push(entity: dict, *actions: dict) -> None:
         # Drop the oldest entries so we keep the most recently planned
         # behavior. PASS 4 tightens this.
         del queue[: len(queue) - _MAX_QUEUE_LEN]
+
+
+def _queue_len(entity: dict | None) -> int:
+    if not isinstance(entity, dict):
+        return 0
+    q = entity.get("action_queue")
+    if not isinstance(q, list):
+        return 0
+    return len(q)
 
 
 def _thief_home_anchor(entity: dict) -> tuple[float, float]:
@@ -167,6 +181,10 @@ def apply_event_actions(state: dict) -> None:
             buyer_type = ev.get("buyer_type")
             buyer = _entity(state, buyer_id)
             if buyer is not None and buyer_type in ("thief", "cop"):
+                cap = _THIEF_QUEUE_SOFT_CAP if buyer_type == "thief" else _COP_QUEUE_SOFT_CAP
+                if _queue_len(buyer) >= cap:
+                    ev["_action_enqueued"] = True
+                    continue
                 _push(
                     buyer,
                     {"type": "move", "target": "spy_location", "source_event": et},
@@ -177,6 +195,9 @@ def apply_event_actions(state: dict) -> None:
         elif et == "steal_agent":
             thief = _entity(state, ev.get("thief_id"))
             if thief is not None:
+                if _queue_len(thief) >= _THIEF_QUEUE_SOFT_CAP:
+                    ev["_action_enqueued"] = True
+                    continue
                 # Deterministic branch lock (NO randomness):
                 # alternate worker-home raid and worker-direct raid each incident.
                 branch = str(thief.get("_next_raid_branch", "worker_home"))
@@ -211,6 +232,9 @@ def apply_event_actions(state: dict) -> None:
         elif et == "cop_recover":
             cop = _entity(state, ev.get("cop_id"))
             if cop is not None:
+                if _queue_len(cop) >= _COP_QUEUE_SOFT_CAP:
+                    ev["_action_enqueued"] = True
+                    continue
                 # Deterministic branch lock (NO randomness):
                 # choose ONE of {thief live position, thief home anchor} per cycle,
                 # then alternate next cycle.
@@ -271,13 +295,30 @@ def snapshot_queues(state: dict) -> dict[str, list[dict]]:
 
 # Movement arrival tolerance for queue actions, in world pixels.
 # Per spec: "IF arrived (distance <= 10): pop action".
-_ACTION_ARRIVE_EPS_PX = 10.0
+_ACTION_ARRIVE_EPS_PX = 16.0
 
 # Fail-safe: if a single action sits at the head of the queue for more than
 # this many ticks without completing, pop it so the agent doesn't lock up
 # (e.g. the target moved into an unreachable tile). Generous enough that
 # normal cross-map walks never trip it.
-_ACTION_MAX_TICKS = 180
+_ACTION_MAX_TICKS = 90
+
+
+def _action_arrive_eps(action: dict) -> float:
+    target = str((action or {}).get("target") or "").lower()
+    if target in {"worker_location", "thief_location"}:
+        # Dynamic targets can keep moving; treat near-proximity as "arrived"
+        # to prevent long chase-jiggle stalls.
+        return 36.0
+    return _ACTION_ARRIVE_EPS_PX
+
+
+def _action_max_ticks(action: dict) -> int:
+    target = str((action or {}).get("target") or "").lower()
+    if target in {"worker_location", "thief_location"}:
+        # Fail faster on moving targets so queue stays responsive.
+        return 36
+    return _ACTION_MAX_TICKS
 
 
 def _find_first_by(state: dict, predicate) -> dict | None:
@@ -527,7 +568,8 @@ def consume_action_queue(entity: dict, state: dict, tick: int) -> bool:
                 entity.pop("_action_arrived_tick", None)
                 continue
 
-            if _distance(entity, pt) <= _ACTION_ARRIVE_EPS_PX:
+            arrive_eps = _action_arrive_eps(action)
+            if _distance(entity, pt) <= arrive_eps:
                 # Arrived. Park the sprite on the target pixel and hold
                 # for a couple of ticks so the arrival is readable.
                 entity["target_x"] = float(pt[0])
@@ -546,7 +588,8 @@ def consume_action_queue(entity: dict, state: dict, tick: int) -> bool:
                 _inject_micro_pause_if_needed(queue)
                 continue
 
-            if elapsed > _ACTION_MAX_TICKS:
+            max_ticks = _action_max_ticks(action)
+            if elapsed > max_ticks:
                 # Fail-safe: something is keeping us from arriving. Pop
                 # and move on so the queue keeps flowing.
                 queue.pop(0)

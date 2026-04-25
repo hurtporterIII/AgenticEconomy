@@ -1,4 +1,7 @@
 from __future__ import annotations
+import os
+
+LEARNING_ENABLED = os.getenv("AGENTIC_LEARNING_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _clamp(value: float, low: float, high: float) -> float:
@@ -12,6 +15,8 @@ def _append_bounded(bucket: list, row: dict, max_len: int = 60) -> None:
 
 
 def thief_learn_bank_penalty(state: dict, thief_id: str, amount: float) -> dict:
+    if not LEARNING_ENABLED:
+        return {}
     entities = state.setdefault("entities", {})
     thief = entities.get(thief_id)
     if not isinstance(thief, dict):
@@ -52,6 +57,8 @@ def thief_learn_bank_penalty(state: dict, thief_id: str, amount: float) -> dict:
 
 
 def cop_learn_response(state: dict, cop_id: str, reward: float, mode: str) -> dict:
+    if not LEARNING_ENABLED:
+        return {}
     entities = state.setdefault("entities", {})
     cop = entities.get(cop_id)
     if not isinstance(cop, dict):

@@ -1,4 +1,5 @@
 import random
+import os
 
 
 def safe_get(mapping, key, default=None):
@@ -14,6 +15,7 @@ def clamp(value, low, high):
 
 RISKY_ACTIONS = ["steal_agent", "steal_bank"]
 SAFE_ACTIONS = ["work", "deposit_bank", "patrol"]
+LEARNING_ENABLED = os.getenv("AGENTIC_LEARNING_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _role_goals(role):
@@ -63,6 +65,8 @@ def compute_reflection(agent):
 
 
 def compute_policy_bias(agent):
+    if not LEARNING_ENABLED:
+        return {}
     reflection = str(agent.get("reflection", "balanced"))
     if reflection == "defensive":
         return {"idle": 1.3, "risky": 0.7, "safe": 1.05}
@@ -72,6 +76,8 @@ def compute_policy_bias(agent):
 
 
 def maybe_reflect(agent, state=None, role=None):
+    if not LEARNING_ENABLED:
+        return None
     """
     Periodically synthesize recent memory into a concise reflection.
     Emits a reflection event into shared state at low frequency.
@@ -155,7 +161,7 @@ def choose_action(agent, action_utilities, state=None, role=None):
     keys = list(action_utilities.keys())
     mind = ensure_mind(agent, role=role)
     policy = ensure_policy(agent, keys)
-    base = policy["weights"]
+    base = policy["weights"] if LEARNING_ENABLED else {key: 1.0 for key in keys}
     goals = mind.get("goals", _role_goals(role or agent.get("type")))
     mood = str(mind.get("mood", "neutral"))
     confidence = float(mind.get("confidence", 0.5))
@@ -219,18 +225,19 @@ def choose_action(agent, action_utilities, state=None, role=None):
             policy["last_adjusted_weights"] = adjusted
             agent["top_action"] = key
             mind["intent"] = f"{key} (mood={mood}, confidence={confidence:.2f})"
-            remember(
-                agent,
-                {
-                    "kind": "decision",
-                    "tick": int(state.setdefault("economy", {}).get("tick", 0)) if state else None,
-                    "action": key,
-                    "utilities": {k: round(float(action_utilities.get(k, 0.0)), 4) for k in keys},
-                    "confidence": round(confidence, 4),
-                    "mood": mood,
-                },
-            )
-            maybe_reflect(agent, state=state, role=role)
+            if LEARNING_ENABLED:
+                remember(
+                    agent,
+                    {
+                        "kind": "decision",
+                        "tick": int(state.setdefault("economy", {}).get("tick", 0)) if state else None,
+                        "action": key,
+                        "utilities": {k: round(float(action_utilities.get(k, 0.0)), 4) for k in keys},
+                        "confidence": round(confidence, 4),
+                        "mood": mood,
+                    },
+                )
+                maybe_reflect(agent, state=state, role=role)
             return key, adjusted
     fallback = keys[-1]
     policy["last_action"] = fallback
@@ -244,6 +251,8 @@ def reinforce_action(agent, action, reward, learning_rate=0.2, state=None, role=
     Reinforce the selected action weight based on realized reward.
     Positive reward increases propensity; negative reward reduces it.
     """
+    if not LEARNING_ENABLED:
+        return
     policy = agent.setdefault("policy", {})
     mind = ensure_mind(agent, role=role)
     weights = policy.setdefault("weights", {})
