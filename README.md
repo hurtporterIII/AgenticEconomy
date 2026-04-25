@@ -1,59 +1,62 @@
 # AgenticEconomy
 
-**Real-Time Agent-to-Agent Micro-Economy on Arc Testnet**
+**Real Agent-to-Agent Micro-Economy on Arc Testnet**
 
-A live simulation where autonomous AI agents earn, steal, trade intelligence, recover assets, and settle every action **on-chain** using real USDC on Arc testnet.
+Live simulation where autonomous AI agents earn, steal, buy/sell intelligence, recover value, and settle every action **on-chain** using real USDC on Arc testnet.
 
 ### Hackathon Compliance
 
-| Requirement                        | Status     | Details |
-|------------------------------------|------------|-------|
-| Real per-action pricing <= $0.01   | ✅ Passed   | Current: ~$0.00009 per action |
-| 50+ real on-chain transactions     | ✅ Live    | Actively generating during demo |
-| Arc + USDC settlement              | ✅ Passed   | Fully implemented |
-| Agent-to-Agent economic loop       | ✅ Passed   | Workers, Thieves, Cops, Spies, Bankers |
+| Requirement                        | Status   | Details |
+|------------------------------------|----------|---------|
+| Real per-action pricing <= $0.01   | ✅ Passed | Sub-cent in live runtime (`/api/compliance/status`) |
+| 50+ real on-chain transactions     | ✅ Live   | Actively generating during demo (`real_tx_count`) |
+| Arc + USDC settlement              | ✅ Passed | Fully implemented |
+| Agent-to-agent economic loop       | ✅ Passed | Workers, thieves, cops, spies, bankers |
 
-### Live Demo Links
+**Public Demo URL**  
+-> [PASTE YOUR PUBLIC UI URL HERE]
 
-**Main Simulation (Watch Agents Move)**  
--> **http://127.0.0.1:8010/demo/bridge_smallville/0/2/**
-
-**Compliance & Proof**  
--> **http://127.0.0.1:8000/api/compliance/status** (must show `compliant: true`)
-
-**Recent On-Chain Transactions**  
--> **http://127.0.0.1:8000/api/tx/recent**
-
-**Arc Testnet Explorer**  
--> **https://testnet.arcscan.app/**
+**Public API URL**  
+-> [PASTE YOUR PUBLIC API URL HERE]
 
 ### Quick Start
 
 ```powershell
-# Start full stack
-powershell -ExecutionPolicy Bypass -File ".\start_smallville.ps1"
+# 1. Clone the repo
+git clone https://github.com/hurtporterIII/AgenticEconomy.git
+cd AgenticEconomy
 
-# Stop
+# 2. Start the full system
+powershell -ExecutionPolicy Bypass -File ".\start_smallville.ps1"
+```
+
+Open the simulation after startup:
+
+- Local UI: `http://127.0.0.1:8010/demo/bridge_smallville/0/2/`
+- Local compliance check: `http://127.0.0.1:8000/api/compliance/status`
+- Local tx diagnostics: `http://127.0.0.1:8000/api/tx/diagnostics`
+
+### Stop the System
+
+```powershell
 powershell -ExecutionPolicy Bypass -File ".\stop_smallville.ps1"
 ```
 
-### Core Concept
-
-Traditional blockchain gas fees make high-frequency micro-transactions uneconomical.  
-**AgenticEconomy** proves that **real agent-driven commerce at sub-cent pricing** is possible using Arc + USDC.
-
-Agents continuously:
-- Generate value (Workers)
-- Buy intel and steal (Thieves)
-- Buy intel and recover (Cops)
-- Sell intelligence (Spies)
-- Settle everything on-chain
-
-Every meaningful action has a transparent, priced, and on-chain financial consequence.
-
 ### Key Features
 
-- Dynamic spy intel marketplace (price adjustable in real time)
-- Real economic incentives and learning behaviors
-- Full on-chain settlement visibility
-- Live bank panel with both simulation + on-chain data
+- Dynamic spy intel marketplace (runtime-adjustable intel pricing)
+- Real economic incentives and adaptive agent behavior
+- On-chain settlement with Arc + USDC
+- Live bank panel showing simulation state + on-chain transaction stream
+
+### Margin Explanation
+
+Traditional gas fees make high-frequency micro-transactions uneconomical because fee overhead can exceed the value being moved per action.
+
+AgenticEconomy uses Arc + USDC settlement with sub-cent action pricing so each action can remain economically meaningful while still being verifiable on-chain.
+
+### On-Chain Proof
+
+- Recent transaction feed: `GET /api/tx/recent`
+- Runtime diagnostics: `GET /api/tx/diagnostics`
+- Explorer: [Arc Testnet Explorer](https://testnet.arcscan.app/)
