@@ -256,16 +256,8 @@ def reset_economy_endpoint(start_balance: float = 5.0):
                 entity["policy"]["last_outcome"] = None
         shared["events"] = create_event_buffer(initial=[])
         shared["economy"] = default_economy_state()
-        shared.setdefault("metrics", {}).update(
-            {
-                "total_spent": 0.0,
-                "successful_tx": 0,
-                "failed_tx": 0,
-                "cost_per_action": 0.0,
-                "success_rate": 0.0,
-            }
-        )
-        shared.setdefault("tx_diagnostics", {}).clear()
+        # Keep global tx proof counters/history intact across simulation resets.
+        # Arc ledger is immutable; reset should only normalize simulation actors/state.
         shared.setdefault("settlement", {}).update(
             {"pending_intents": [], "last_cycle_tick": 0, "last_cycle_summary": {}}
         )
