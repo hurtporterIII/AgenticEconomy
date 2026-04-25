@@ -52,6 +52,7 @@ def _settlement_state():
     settlement.setdefault("pending_intents", [])
     settlement.setdefault("last_cycle_tick", 0)
     settlement.setdefault("last_cycle_summary", {})
+    settlement.setdefault("recent_records", [])
     return settlement
 
 
@@ -447,6 +448,8 @@ def get_tx_runtime_status():
             "has_entity_secret": bool(config["entity_secret"]),
             "has_wallet_address": bool(config["wallet_address"]),
             "has_destination_address": bool(config["destination_address"]),
+            "wallet_address": config["wallet_address"],
+            "destination_address": config["destination_address"],
             "host": config["host"],
             "blockchain": config["blockchain"],
             "token_address": config["token_address"],
@@ -607,6 +610,23 @@ def execute_settlement_cycle(shared, tick):
         )
 
     settlement["pending_intents"] = remaining
+    history = settlement.setdefault("recent_records", [])
+    now = time.time()
+    for rec in settlement_records:
+        history.append(
+            {
+                "tick": int(tick),
+                "ts_epoch": now,
+                "intent_id": rec.get("intent_id"),
+                "from_wallet": rec.get("from_wallet"),
+                "to_wallet": rec.get("to_wallet"),
+                "tx_hash": rec.get("tx_hash"),
+                "amount_submitted": rec.get("amount_submitted"),
+                "is_real": bool(rec.get("is_real")),
+            }
+        )
+    if len(history) > 1000:
+        del history[:-1000]
     summary = {
         "tick": int(tick),
         "strategy": strategy,

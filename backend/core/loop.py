@@ -1121,16 +1121,18 @@ def run_loop(state):
     update_spatial_world(shared)
 
     economy = shared.setdefault("economy", {})
-    settlement_summary = execute_settlement_cycle(shared, economy.get("tick", 0))
-    if settlement_summary is not None:
-        events.append(
-            {
-                "type": "settlement_cycle",
-                "summary": settlement_summary,
-                "network": "Arc",
-                "asset": "USDC",
-            }
-        )
+    demo_fast = os.getenv("AGENTIC_SIM_ONLY", "").strip().lower() in {"1", "true", "yes", "on"}
+    if not demo_fast:
+        settlement_summary = execute_settlement_cycle(shared, economy.get("tick", 0))
+        if settlement_summary is not None:
+            events.append(
+                {
+                    "type": "settlement_cycle",
+                    "summary": settlement_summary,
+                    "network": "Arc",
+                    "asset": "USDC",
+                }
+            )
 
     IMPORTANT_EVENTS = {
         "worker_earn",

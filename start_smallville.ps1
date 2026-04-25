@@ -114,9 +114,9 @@ if (-not (Test-PortListening $backendPort)) {
     # Sim-only: clamp after `.env` load in Python (see AGENTIC_SIM_ONLY in main.py / arc.py).
     $backendCmd = "`$env:AGENTIC_SIM_ONLY='1'; `$env:CIRCLE_POLL_ATTEMPTS='1'; `$env:FORCE_SINGLE_TARGET='0'; `$env:AUTO_TICK_ENABLED='1'; `$env:AUTO_TICK_MS='100'; & `"$backendPythonExe`" -m uvicorn main:app --host 127.0.0.1 --port $backendPort"
   } else {
-    # Respect `.env` / user environment for Arc (TX_REAL_MODE, SETTLEMENT_STRATEGY, Circle keys).
+    # Normal mode: allow real settlement according to .env / runtime config.
     # AUTO_TICK_*: background sim loop in main.py — keep Django from also stepping every poll (see SMALLVILLE_BRIDGE_STEP_ON_POLL below).
-    $backendCmd = "`$env:AUTO_TICK_ENABLED='1'; `$env:AUTO_TICK_MS='100'; & `"$backendPythonExe`" -m uvicorn main:app --host 127.0.0.1 --port $backendPort"
+    $backendCmd = "`$env:FORCE_SINGLE_TARGET='0'; `$env:AUTO_TICK_ENABLED='1'; `$env:AUTO_TICK_MS='100'; & `"$backendPythonExe`" -m uvicorn main:app --host 127.0.0.1 --port $backendPort"
   }
   Start-Process powershell -WorkingDirectory $backendDir -ArgumentList '-NoExit','-Command',$backendCmd | Out-Null
   Start-Sleep -Seconds 2

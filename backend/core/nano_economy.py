@@ -52,8 +52,11 @@ COP_TRIGGER_THEFTS = 2
 COP_BANK_SHARE = 0.50           # of recovered                 (spec: 0.50)
 COP_SELF_SHARE = 0.50           # of recovered                 (spec: 0.50)
 
-# Spy charges a flat fee per piece of intel.                   (spec: 0.000005)
-INTEL_PRICE = 0.000005
+# Spy intel price defaults to 0.000005 USDC and can be adjusted at runtime.
+# Clamp to hackathon-safe range (must stay <= $0.01 per action).
+INTEL_PRICE_DEFAULT = 0.000005
+INTEL_PRICE_MIN = 0.000001
+INTEL_PRICE_MAX = 0.01
 # Keep thief active in demo loops: minimal float for paying spy intel when
 # repeated penalties/confiscations drive liquid to ~0.
 THIEF_MIN_OPERATING_FLOAT = 0.00005
@@ -66,6 +69,36 @@ WORKER_DEPOSIT = 0.00001        # must match agents.worker.DEPOSIT
 WORKER_HOME = 0.00009           # must match agents.worker.HOME
 
 _ROUND = 10                     # decimal places for nano amounts
+
+
+def _clamp_intel_price(value):
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        v = INTEL_PRICE_DEFAULT
+    if v < INTEL_PRICE_MIN:
+        return INTEL_PRICE_MIN
+    if v > INTEL_PRICE_MAX:
+        return INTEL_PRICE_MAX
+    return round(v, _ROUND)
+
+
+def _spy_intel_price(state, spy=None):
+    if spy is None:
+        spy = _first_spy(state)
+    fallback = INTEL_PRICE_DEFAULT
+    economy = state.setdefault("economy", {})
+    if isinstance(economy, dict):
+        fallback = economy.get("intel_price", fallback)
+    raw = fallback
+    if isinstance(spy, dict):
+        raw = spy.get("intel_price", fallback)
+    price = _clamp_intel_price(raw)
+    if isinstance(spy, dict):
+        spy["intel_price"] = price
+    if isinstance(economy, dict):
+        economy["intel_price"] = price
+    return price
 
 
 # ---------------------------------------------------------------------------
@@ -293,6 +326,7 @@ def apply_thief_steals(state):
     if spy is None:
         return
     spy_id = spy["id"]
+    intel_price = _spy_intel_price(state, spy)
     banker = _first_of_type(state, "banker")
     bank = _first_of_type(state, "bank")
 
@@ -380,7 +414,7 @@ def apply_thief_steals(state):
         if thief_liquid < 0:
             balances[thief_id] = 0.0
             thief_liquid = 0.0
-        if thief_liquid < INTEL_PRICE:
+        if thief_liquid < intel_price:
             # Try to fund a tiny operating float from banker/bank so the thief
             # can keep buying intel and moving in the simulation.
             source_id = None
@@ -391,7 +425,7 @@ def apply_thief_steals(state):
             source_liquid = float(balances.get(source_id, 0.0) or 0.0) if source_id else 0.0
             needed = max(0.0, THIEF_MIN_OPERATING_FLOAT - thief_liquid)
             topup = round(min(needed, source_liquid), _ROUND)
-            if source_id and topup >= INTEL_PRICE:
+            if source_id and topup >= intel_price:
                 tx_src = debit(source_id, topup, None)
                 tx_dst = credit(thief_id, topup, None)
                 thief_liquid = float(balances.get(thief_id, 0.0) or 0.0)
@@ -409,7 +443,7 @@ def apply_thief_steals(state):
                         "asset": "USDC",
                     }
                 )
-            if thief_liquid >= INTEL_PRICE:
+            if thief_liquid >= intel_price:
                 # Re-check this intel now that float is restored.
                 pass
             else:
@@ -422,7 +456,7 @@ def apply_thief_steals(state):
                         "buyer_type": "thief",
                         "spy_id": spy_id,
                         "reason": "buyer_insufficient_liquid",
-                        "price": INTEL_PRICE,
+                        "price": intel_price,
                         "liquid": round(thief_liquid, _ROUND),
                         "network": "Arc",
                         "asset": "USDC",
@@ -432,8 +466,8 @@ def apply_thief_steals(state):
                 continue
 
         # --- Phase A: thief pays spy (intel is now guaranteed to fire) ---
-        tx_pay_debit = debit(thief_id, INTEL_PRICE, None)
-        tx_pay_credit = credit(spy_id, INTEL_PRICE, None)
+        tx_pay_debit = debit(thief_id, intel_price, None)
+        tx_pay_credit = credit(spy_id, intel_price, None)
         events.append(
             {
                 "type": "spy_sell_info",
@@ -443,7 +477,7 @@ def apply_thief_steals(state):
                 "buyer_id": thief_id,
                 "buyer_type": "thief",
                 "spy_id": spy_id,
-                "amount": INTEL_PRICE,
+                "amount": intel_price,
                 "payer": thief_id,
                 "payee": spy_id,
                 "tx_hash": tx_pay_credit,
@@ -580,6 +614,7 @@ def apply_cop_recovery(state):
     if spy is None:
         return
     spy_id = spy["id"]
+    intel_price = _spy_intel_price(state, spy)
     bank_id = bank["id"]
     rr_idx = int(state.get("_nano_recovery_rr", 0) or 0)
     thief_strikes = state.setdefault("_thief_strike_count", {})
@@ -655,7 +690,7 @@ def apply_cop_recovery(state):
             continue
 
         cop_liquid = float(balances.get(cop_id, 0.0) or 0.0)
-        if cop_liquid < INTEL_PRICE:
+        if cop_liquid < intel_price:
             events.append(
                 {
                     "type": "spy_sell_info_skipped",
@@ -665,7 +700,7 @@ def apply_cop_recovery(state):
                     "buyer_type": "cop",
                     "spy_id": spy_id,
                     "reason": "buyer_insufficient_liquid",
-                    "price": INTEL_PRICE,
+                    "price": intel_price,
                     "liquid": round(cop_liquid, _ROUND),
                     "network": "Arc",
                     "asset": "USDC",
@@ -675,8 +710,8 @@ def apply_cop_recovery(state):
             continue
 
         # --- Phase A: cop pays spy (intel is now guaranteed to fire) ---
-        tx_pay_debit = debit(cop_id, INTEL_PRICE, None)
-        tx_pay_credit = credit(spy_id, INTEL_PRICE, None)
+        tx_pay_debit = debit(cop_id, intel_price, None)
+        tx_pay_credit = credit(spy_id, intel_price, None)
         events.append(
             {
                 "type": "spy_sell_info",
@@ -686,7 +721,7 @@ def apply_cop_recovery(state):
                 "buyer_id": cop_id,
                 "buyer_type": "cop",
                 "spy_id": spy_id,
-                "amount": INTEL_PRICE,
+                "amount": intel_price,
                 "payer": cop_id,
                 "payee": spy_id,
                 "tx_hash": tx_pay_credit,

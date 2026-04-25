@@ -17,12 +17,15 @@ if os.getenv("AGENTIC_SIM_ONLY", "").strip().lower() in {"1", "true", "yes", "on
     os.environ["SETTLEMENT_STRATEGY"] = "off"
 
 from fastapi import FastAPI
+import logging
 import threading
 import time
 
 from api.endpoints import router
 from core.loop import run_loop
-from core.state import default_behavior_settings, default_economy_state, state
+from core.state import default_behavior_settings, default_economy_state, state, state_lock
+
+_logger = logging.getLogger(__name__)
 
 
 def create_app():
@@ -46,9 +49,25 @@ def create_app():
         interval = auto_tick_ms / 1000.0
         while not stop_event.is_set():
             try:
-                run_loop(state)
-            except Exception:
-                pass
+                started = time.perf_counter()
+                with state_lock:
+                    run_loop(state)
+                    elapsed_ms = (time.perf_counter() - started) * 1000.0
+                    rt = state.setdefault("_runtime", {})
+                    rt["auto_tick_last_ms"] = round(elapsed_ms, 2)
+                    hist = rt.setdefault("auto_tick_recent_ms", [])
+                    hist.append(round(elapsed_ms, 2))
+                    if len(hist) > 50:
+                        del hist[:-50]
+                    rt["auto_tick_consecutive_failures"] = 0
+            except Exception as exc:
+                with state_lock:
+                    rt = state.setdefault("_runtime", {})
+                    rt["auto_tick_failures"] = int(rt.get("auto_tick_failures", 0)) + 1
+                    rt["auto_tick_consecutive_failures"] = int(rt.get("auto_tick_consecutive_failures", 0)) + 1
+                    rt["auto_tick_last_error"] = str(exc)[:500]
+                    rt["auto_tick_last_error_ts"] = time.time()
+                _logger.exception("auto_tick failed")
             stop_event.wait(interval)
 
     @app.on_event("startup")

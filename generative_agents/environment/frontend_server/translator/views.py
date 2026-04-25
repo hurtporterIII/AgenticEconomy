@@ -31,6 +31,7 @@ BRIDGE_TRACE = os.getenv("SMALLVILLE_BRIDGE_TRACE", "0").strip().lower() in {"1"
 SMALLVILLE_MODE = os.getenv("SMALLVILLE_MODE", "native").strip().lower()
 BRIDGE_ENABLED = SMALLVILLE_MODE == "bridge"
 TILE_SIZE = 32
+BRIDGE_LAST_GOOD_PAYLOAD = None
 # Keep backend destination labels verbatim so role hubs match on-map building titles.
 LOCATION_ALIASES = {}
 
@@ -92,6 +93,7 @@ def _bridge_payload_is_agentic_economy_bridge(payload):
 
 
 def _bridge_fetch():
+  global BRIDGE_LAST_GOOD_PAYLOAD
   if not BRIDGE_ENABLED:
     return {"actors": [], "events": [], "metrics": {}, "world": {}}
   bases = [BRIDGE_URL, BRIDGE_FALLBACK_URL]
@@ -111,12 +113,16 @@ def _bridge_fetch():
       if not _bridge_payload_is_agentic_economy_bridge(payload):
         continue
       actors = payload.get("actors", [])
+      if actors:
+        BRIDGE_LAST_GOOD_PAYLOAD = payload
       if idx == 0 and not actors:
         last_empty = payload
         continue
       return payload
     except Exception:
       continue
+  if BRIDGE_LAST_GOOD_PAYLOAD:
+    return BRIDGE_LAST_GOOD_PAYLOAD
   return last_empty or {"actors": [], "events": [], "metrics": {}, "world": {}}
 
 
@@ -730,6 +736,45 @@ def bridge_tx_diagnostics(request):
     except Exception:
       continue
   return JsonResponse({"ok": False, "error": "tx diagnostics unavailable"}, status=502)
+
+
+def bridge_tx_recent(request):
+  """Proxy paginated on-chain tx rows for bank panel ledger."""
+  if request.method != "GET":
+    return JsonResponse({"error": "method not allowed"}, status=405)
+  if not BRIDGE_ENABLED:
+    return JsonResponse({"ok": False, "error": "bridge mode disabled"}, status=400)
+
+  raw_page = request.GET.get("page", "1")
+  raw_page_size = request.GET.get("page_size", "10")
+  raw_max_records = request.GET.get("max_records", "50")
+  try:
+    page = max(1, int(raw_page))
+  except Exception:
+    page = 1
+  try:
+    page_size = max(1, min(50, int(raw_page_size)))
+  except Exception:
+    page_size = 10
+  try:
+    max_records = max(10, min(200, int(raw_max_records)))
+  except Exception:
+    max_records = 50
+
+  for base_url in [BRIDGE_URL, BRIDGE_FALLBACK_URL]:
+    base = _bridge_api_base(base_url)
+    if not base:
+      continue
+    try:
+      url = f"{base}/api/tx/recent?page={page}&page_size={page_size}&max_records={max_records}"
+      res = requests.get(url, timeout=8.0)
+      if res.status_code == 200:
+        payload = res.json()
+        payload["ok"] = True
+        return JsonResponse(payload)
+    except Exception:
+      continue
+  return JsonResponse({"ok": False, "error": "tx recent unavailable"}, status=502)
 
 
 def bridge_reset_economy(request):

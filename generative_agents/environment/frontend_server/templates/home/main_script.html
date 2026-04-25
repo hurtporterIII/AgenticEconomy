@@ -150,9 +150,14 @@
 
 	// <timer_max> determines poll frequency. Bridge mode uses FastAPI AUTO_TICK for sim time;
 	// polling only fetches state — a slightly faster poll keeps sprite follow smooth.
-	let timer_max = 1;
+	let timer_max = 10;
 	let timer = timer_max;
 	let bank_diag_poll_countdown = 0;
+	let bridge_poll_inflight = false;
+	let bank_onchain_page = 1;
+	let bank_onchain_total_pages = 1;
+	const bank_onchain_page_size = 10;
+	const bank_onchain_max_records = 50;
 
 	// <phase> -- there are three phases: "process," "update," and "execute."
 	let phase = "update"; // or "update" or "execute"
@@ -198,17 +203,86 @@
 		return lines.length ? lines.map(function(l){ return "- " + l; }).join("<br>") : "None";
 	}
 
+	function shortTxHash(h) {
+		let s = String(h || "");
+		if (s.length <= 18) return s;
+		return s.slice(0, 10) + "..." + s.slice(-8);
+	}
+
+	function setOnchainPagerState(page, totalPages) {
+		bank_onchain_page = Math.max(1, Number(page || 1));
+		bank_onchain_total_pages = Math.max(1, Number(totalPages || 1));
+		let pageInfoEl = document.getElementById("bank_onchain_page_info");
+		if (pageInfoEl) pageInfoEl.innerHTML = "Page " + bank_onchain_page + " / " + bank_onchain_total_pages;
+		let prevEl = document.getElementById("bank_onchain_prev");
+		if (prevEl) prevEl.disabled = bank_onchain_page <= 1;
+		let nextEl = document.getElementById("bank_onchain_next");
+		if (nextEl) nextEl.disabled = bank_onchain_page >= bank_onchain_total_pages;
+		let pagesWrap = document.getElementById("bank_onchain_pages");
+		if (pagesWrap) {
+			let btns = [];
+			for (let p=1; p<=bank_onchain_total_pages; p++) {
+				let cls = (p === bank_onchain_page) ? "btn btn-primary btn-xs" : "btn btn-default btn-xs";
+				btns.push("<button type='button' class='" + cls + "' onclick='window.__bankOnchainGo(" + p + ")'>" + p + "</button>");
+			}
+			pagesWrap.innerHTML = btns.join("");
+		}
+	}
+
+	function renderBankOnchainRows(payload) {
+		let rowsEl = document.getElementById("bank_onchain_rows");
+		if (!rowsEl) return;
+		let items = Array.isArray(payload["items"]) ? payload["items"] : [];
+		if (!items.length) {
+			rowsEl.innerHTML = "<tr><td colspan='5'>No on-chain transactions yet.</td></tr>";
+		} else {
+			rowsEl.innerHTML = items.map(function(tx){
+				let hash = String(tx["tx_hash"] || "");
+				let href = "https://testnet.arcscan.app/tx/" + hash;
+				let amt = formatBridgeMoney(tx["amount"] || 0);
+				return "<tr>"
+					+ "<td><a href='" + href + "' target='_blank' rel='noopener noreferrer'>" + shortTxHash(hash) + "</a></td>"
+					+ "<td>" + String(tx["type"] || "tx") + "</td>"
+					+ "<td>" + amt + "</td>"
+					+ "<td>" + String(tx["payer"] || "-") + "</td>"
+					+ "<td>" + String(tx["payee"] || "-") + "</td>"
+					+ "</tr>";
+			}).join("");
+		}
+		setOnchainPagerState(payload["page"], payload["total_pages"]);
+	}
+
+	function fetchBankOnchainTxPage(page) {
+		if (!bridge_mode) return;
+		let p = Math.max(1, Number(page || 1));
+		let req = new XMLHttpRequest();
+		req.overrideMimeType("application/json");
+		req.open("GET", "{% url 'bridge_tx_recent' %}?page=" + p + "&page_size=" + bank_onchain_page_size + "&max_records=" + bank_onchain_max_records, true);
+		req.addEventListener("load", function() {
+			if (req.status !== 200) return;
+			try {
+				let payload = JSON.parse(req.responseText || "{}");
+				if (payload && payload.ok) renderBankOnchainRows(payload);
+			} catch (e) {}
+		});
+		req.send();
+	}
+
 	function updateBankPanelFromPersona(personaPayload) {
 		let rowsEl = document.getElementById("bank_panel_rows");
 		if (!rowsEl) return;
 		let entries = [];
 		let workerWalletTotal = 0;
 		let copWalletTotal = 0;
+		let bankerWalletTotal = 0;
+		let spyWalletTotal = 0;
+		let thiefWalletTotal = 0;
 		let storedTotal = 0;
+		let includedRoles = {"worker": true, "cop": true, "banker": true, "spy": true, "thief": true};
 		Object.keys(personaPayload || {}).forEach(function(name){
 			let p = personaPayload[name] || {};
 			let role = String(p["role"] || "").toLowerCase();
-			if (role !== "worker" && role !== "cop") return;
+			if (!includedRoles[role]) return;
 			let balance = Number(p["balance"] || 0);
 			let stored = Number(p["home_storage"] || 0);
 			let collected = Number(p["lifetime_collected"] || 0);
@@ -217,6 +291,9 @@
 			if (!Number.isFinite(net)) net = collected - lost;
 			if (role === "worker") workerWalletTotal += balance;
 			if (role === "cop") copWalletTotal += balance;
+			if (role === "banker") bankerWalletTotal += balance;
+			if (role === "spy") spyWalletTotal += balance;
+			if (role === "thief") thiefWalletTotal += balance;
 			storedTotal += stored;
 			entries.push({
 				name: name,
@@ -231,7 +308,8 @@
 		});
 		entries.sort(function(a, b){ return a.name.localeCompare(b.name); });
 		if (!entries.length) {
-			rowsEl.innerHTML = "<tr><td colspan='8'>No worker/cop rows yet.</td></tr>";
+			// Transient bridge misses should not blank the judge-facing economy panel.
+			return;
 		} else {
 			rowsEl.innerHTML = entries.map(function(r){
 				return "<tr>"
@@ -250,6 +328,12 @@
 		if (workersEl) workersEl.innerHTML = formatBridgeMoney(workerWalletTotal);
 		let copsEl = document.getElementById("bank_virtual_cops");
 		if (copsEl) copsEl.innerHTML = formatBridgeMoney(copWalletTotal);
+		let bankersEl = document.getElementById("bank_virtual_bankers");
+		if (bankersEl) bankersEl.innerHTML = formatBridgeMoney(bankerWalletTotal);
+		let spiesEl = document.getElementById("bank_virtual_spies");
+		if (spiesEl) spiesEl.innerHTML = formatBridgeMoney(spyWalletTotal);
+		let thievesEl = document.getElementById("bank_virtual_thieves");
+		if (thievesEl) thievesEl.innerHTML = formatBridgeMoney(thiefWalletTotal);
 		let storedEl = document.getElementById("bank_virtual_stored");
 		if (storedEl) storedEl.innerHTML = formatBridgeMoney(storedTotal);
 	}
@@ -270,9 +354,19 @@
 		let statusEl = document.getElementById("bank_tx_status");
 		if (statusEl) statusEl.innerHTML = String(diagnostics["last_status"] || "unknown") + " (" + String(diagnostics["last_mode"] || "simulate") + ")";
 		let rw1 = document.getElementById("bank_real_wallet_1");
-		if (rw1) rw1.innerHTML = config["has_wallet_address"] ? "Configured (Entity settlement wallet)" : "Missing";
+		if (rw1) {
+			let w1 = String(config["wallet_address"] || "");
+			rw1.innerHTML = config["has_wallet_address"]
+				? ("Configured (Entity settlement wallet) <br><code>" + w1 + "</code>")
+				: "Missing";
+		}
 		let rw2 = document.getElementById("bank_real_wallet_2");
-		if (rw2) rw2.innerHTML = config["has_destination_address"] ? "Configured (Destination wallet)" : "Missing";
+		if (rw2) {
+			let w2 = String(config["destination_address"] || "");
+			rw2.innerHTML = config["has_destination_address"]
+				? ("Configured (Destination wallet) <br><code>" + w2 + "</code>")
+				: "Missing";
+		}
 		let drips = diagnostics["last_native_drip_targets"];
 		let dripsEl = document.getElementById("bank_drip_targets");
 		if (dripsEl) dripsEl.innerHTML = Array.isArray(drips) && drips.length ? drips.join(" | ") : "-";
@@ -292,7 +386,10 @@
 			if (req.status !== 200) return;
 			try {
 				let payload = JSON.parse(req.responseText || "{}");
-				if (payload && payload.ok) updateBankTxDiagnosticsCard(payload);
+				if (payload && payload.ok) {
+					updateBankTxDiagnosticsCard(payload);
+					fetchBankOnchainTxPage(bank_onchain_page);
+				}
 			} catch (e) {}
 		});
 		req.send();
@@ -318,8 +415,17 @@
 		if (workersEl) workersEl.innerHTML = formatBridgeMoney(0);
 		let copsEl = document.getElementById("bank_virtual_cops");
 		if (copsEl) copsEl.innerHTML = formatBridgeMoney(0);
+		let bankersEl = document.getElementById("bank_virtual_bankers");
+		if (bankersEl) bankersEl.innerHTML = formatBridgeMoney(0);
+		let spiesEl = document.getElementById("bank_virtual_spies");
+		if (spiesEl) spiesEl.innerHTML = formatBridgeMoney(0);
+		let thievesEl = document.getElementById("bank_virtual_thieves");
+		if (thievesEl) thievesEl.innerHTML = formatBridgeMoney(0);
 		let storedEl = document.getElementById("bank_virtual_stored");
 		if (storedEl) storedEl.innerHTML = formatBridgeMoney(0);
+		let onchainRowsEl = document.getElementById("bank_onchain_rows");
+		if (onchainRowsEl) onchainRowsEl.innerHTML = "<tr><td colspan='5'>Reset complete. Waiting for on-chain transactions...</td></tr>";
+		setOnchainPagerState(1, 1);
 	}
 
 	// Variables for storing movements that are sent from the backend server.
@@ -342,6 +448,7 @@
 	const bridge_predict_ms = 0;
 	const bridge_max_step = 4.5;
 	const bridge_steady_step = 5.5;
+	const bridge_catchup_step = 8.0;
 	const bridge_stale_ms = 86400000;
 	let bridge_collision_layer = null;
 	let bridge_wall_layer = null;
@@ -864,11 +971,13 @@
 	  }
 
 	  if (bridge_mode) {
-	  	if (timer <= 0) {
+	  	if (timer <= 0 && !bridge_poll_inflight) {
+	      bridge_poll_inflight = true;
 	      var bridge_xobj = new XMLHttpRequest();
 	      bridge_xobj.overrideMimeType("application/json");
 	      bridge_xobj.open('POST', "{% url 'update_environment' %}", true);
 	      bridge_xobj.addEventListener("load", function() {
+	        bridge_poll_inflight = false;
 	        if (this.readyState === 4 && bridge_xobj.status === 200) {
 	          let payload = JSON.parse(bridge_xobj.responseText);
 	          if (payload["meta"] && payload["meta"]["curr_time"]) {
@@ -980,6 +1089,10 @@
 	          timer = timer_max;
 	        }
 	      });
+	      bridge_xobj.addEventListener("error", function() {
+	      	bridge_poll_inflight = false;
+	      	timer = timer_max;
+	      });
 	      bridge_xobj.send(JSON.stringify({"step": step, "sim_code": sim_code }));
 	    }
 
@@ -1019,9 +1132,9 @@
 	    		let dy = srv[1] - sprite.y;
 	    		let dist = Math.sqrt((dx * dx) + (dy * dy));
 	    		if (dist > 0.25) {
-	    			let step;
-	    			if (dist > 128) { step = dist; }
-	    			else { step = Math.min(bridge_steady_step, dist); }
+	    			let step = bridge_steady_step;
+	    			if (dist > 64) step = bridge_catchup_step;
+	    			step = Math.min(step, dist);
 	    			let nx = sprite.x + (dx / dist) * step;
 	    			let ny = sprite.y + (dy / dist) * step;
 	    			sprite.setPosition(nx, ny);
@@ -1249,7 +1362,24 @@ var demo_cycle_button=document.getElementById("demo_cycle_button");
 var demo_cycle_status=document.getElementById("demo_cycle_status");
 var bank_reset_button=document.getElementById("bank_reset_button");
 var bank_reset_status=document.getElementById("bank_reset_status");
+var bank_onchain_prev=document.getElementById("bank_onchain_prev");
+var bank_onchain_next=document.getElementById("bank_onchain_next");
 	var game;
+
+window.__bankOnchainGo = function(pageNum) {
+	fetchBankOnchainTxPage(pageNum);
+};
+
+if (bank_onchain_prev) {
+	bank_onchain_prev.onclick = function() {
+		fetchBankOnchainTxPage(Math.max(1, bank_onchain_page - 1));
+	};
+}
+if (bank_onchain_next) {
+	bank_onchain_next.onclick = function() {
+		fetchBankOnchainTxPage(Math.min(bank_onchain_total_pages, bank_onchain_page + 1));
+	};
+}
 
 if (demo_cycle_button) {
 	demo_cycle_button.onclick = function() {
@@ -1311,6 +1441,7 @@ if (bank_reset_button) {
 }
 
 pollBankTxDiagnosticsIfNeeded(true);
+fetchBankOnchainTxPage(1);
 
 	// FORCE PHASER START (engine-only test): no async boot, no spawn guards.
 	game = new Phaser.Game(config);

@@ -1,5 +1,10 @@
 import random
+import threading
 from utils.logger import EventBuffer, create_event_buffer
+
+# Serialize access to the in-memory `state` dict (auto-tick thread + HTTP handlers).
+# Callers hold this around run_loop() and other mutations; do not acquire inside run_loop.
+state_lock = threading.RLock()
 
 
 def default_behavior_settings():
@@ -79,6 +84,7 @@ state = {
         "pending_intents": [],
         "last_cycle_tick": 0,
         "last_cycle_summary": {},
+        "recent_records": [],
     },
 }
 
@@ -101,6 +107,7 @@ def load_state():
     state["settlement"].setdefault("pending_intents", [])
     state["settlement"].setdefault("last_cycle_tick", 0)
     state["settlement"].setdefault("last_cycle_summary", {})
+    state["settlement"].setdefault("recent_records", [])
     return state
 
 
@@ -124,4 +131,5 @@ def save_state(new_state):
     state["settlement"].setdefault("pending_intents", [])
     state["settlement"].setdefault("last_cycle_tick", 0)
     state["settlement"].setdefault("last_cycle_summary", {})
+    state["settlement"].setdefault("recent_records", [])
     return state

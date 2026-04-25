@@ -61,6 +61,9 @@
 		  			<p style="font-size:1.15em; margin-top:0.4em;"><strong>Virtual Wallets (In-Simulation)</strong></p>
 		  			<p style="font-size:1.05em;"><strong>Total Worker Virtual Wallets:</strong> <span id="bank_virtual_workers">0.000000</span></p>
 		  			<p style="font-size:1.05em;"><strong>Total Cop Virtual Wallets:</strong> <span id="bank_virtual_cops">0.000000</span></p>
+		  			<p style="font-size:1.05em;"><strong>Total Banker Virtual Wallets:</strong> <span id="bank_virtual_bankers">0.000000</span></p>
+		  			<p style="font-size:1.05em;"><strong>Total Spy Virtual Wallets:</strong> <span id="bank_virtual_spies">0.000000</span></p>
+		  			<p style="font-size:1.05em;"><strong>Total Thief Virtual Wallets:</strong> <span id="bank_virtual_thieves">0.000000</span></p>
 		  			<p style="font-size:1.05em;"><strong>Worker + Cop Stored Reserve:</strong> <span id="bank_virtual_stored">0.000000</span></p>
 		  		</div>
 		  	</div>
@@ -74,6 +77,33 @@
 		  				&nbsp;|&nbsp;<span><strong>Cost/Action:</strong> <span id="bank_cost_per_action">0.000000</span></span>
 		  			</p>
 		  			<p style="font-size:1.05em;"><strong>Status:</strong> <span id="bank_tx_status">waiting...</span></p>
+		  		</div>
+		  	</div>
+		  	<div class="row" style="margin-top:0.8em;">
+		  		<div class="col-md-12">
+		  			<p style="font-size:1.15em; margin-bottom:0.4em;"><strong>Recent On-Chain Transactions (latest 50)</strong></p>
+		  			<div style="max-height:220px; overflow-y:auto; border:1px solid #d6dbe8; border-radius:6px;">
+		  				<table class="table table-condensed" style="background:#ffffff; font-size:0.9em; margin-bottom:0;">
+		  					<thead>
+		  						<tr>
+		  							<th>Tx Hash</th>
+		  							<th>Type</th>
+		  							<th>Amount</th>
+		  							<th>Payer</th>
+		  							<th>Payee</th>
+		  						</tr>
+		  					</thead>
+		  					<tbody id="bank_onchain_rows">
+		  						<tr><td colspan="5">Waiting for on-chain transactions...</td></tr>
+		  					</tbody>
+		  				</table>
+		  			</div>
+		  			<div id="bank_onchain_pager" style="margin-top:8px; display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
+		  				<button id="bank_onchain_prev" type="button" class="btn btn-default btn-xs">&larr; Prev</button>
+		  				<span id="bank_onchain_page_info" style="font-size:0.9em;">Page 1 / 1</span>
+		  				<button id="bank_onchain_next" type="button" class="btn btn-default btn-xs">Next &rarr;</button>
+		  				<span id="bank_onchain_pages" style="display:flex; gap:4px; flex-wrap:wrap;"></span>
+		  			</div>
 		  		</div>
 		  	</div>
 		  	<div style="margin-top:0.8em; overflow-x:auto;">
@@ -159,4 +189,3 @@
 <script src="https://cdn.jsdelivr.net/npm/phaser@3/dist/phaser.js"></script>
 {% include 'home/main_script.html' %}
 {% endblock content %}
-

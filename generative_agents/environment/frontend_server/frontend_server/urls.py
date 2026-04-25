@@ -32,6 +32,7 @@ urlpatterns = [
     url(r'^api/bridge/smallville$', translator_views.bridge_smallville_snapshot, name='bridge_smallville_snapshot'),
     url(r'^api/bridge/force_cop_cycle$', translator_views.bridge_force_cop_cycle, name='bridge_force_cop_cycle'),
     url(r'^api/bridge/tx_diagnostics$', translator_views.bridge_tx_diagnostics, name='bridge_tx_diagnostics'),
+    url(r'^api/bridge/tx_recent$', translator_views.bridge_tx_recent, name='bridge_tx_recent'),
     url(r'^api/bridge/reset_economy$', translator_views.bridge_reset_economy, name='bridge_reset_economy'),
     url(r'^path_tester/$', translator_views.path_tester, name='path_tester'),
     url(r'^path_tester_update/$', translator_views.path_tester_update, name='path_tester_update'),
