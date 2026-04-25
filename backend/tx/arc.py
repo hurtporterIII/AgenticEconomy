@@ -476,6 +476,32 @@ def get_tx_runtime_status():
     }
 
 
+def reset_tx_runtime_counters():
+    """
+    Reset runtime/session counters used by UI diagnostics.
+    Does NOT touch on-chain history or settlement recent_records.
+    """
+    metrics = _metrics()
+    metrics["total_spent"] = 0.0
+    metrics["successful_tx"] = 0
+    metrics["failed_tx"] = 0
+
+    diag = _diagnostics()
+    diag["last_mode"] = "simulate"
+    diag["last_status"] = "init"
+    diag["last_error"] = None
+    diag["last_failure_reason"] = None
+    diag["last_tx_id"] = None
+    diag["last_tx_hash"] = None
+    diag["real_tx_count"] = 0
+    diag["simulated_tx_count"] = 0
+    diag["failed_tx_count"] = 0
+    diag["real_disabled_until"] = 0.0
+    diag["breaker_reason"] = None
+    diag["last_updated"] = time.time()
+    return get_tx_runtime_status()
+
+
 def inspect_transaction(tx_id):
     config = _env_config()
     if not tx_id:
@@ -658,12 +684,16 @@ def submit_transaction(from_wallet, to_wallet, amount):
 
     if numeric_amount <= 0:
         # Non-economic events can carry a simulated marker hash, but should not
-        # be counted as failed settlement attempts.
-        _record_simulated()
+        # be counted as settlement attempts.
         return _simulate(from_wallet, to_wallet, amount)
 
     if config["real_mode"] == "off":
-        _record_failure(reason="real_mode_off")
+        diag = _diagnostics()
+        diag["last_mode"] = "simulate"
+        diag["last_status"] = "real_mode_off"
+        diag["last_error"] = None
+        diag["last_failure_reason"] = None
+        diag["last_updated"] = time.time()
         _record_simulated()
         return _simulate(from_wallet, to_wallet, amount)
 

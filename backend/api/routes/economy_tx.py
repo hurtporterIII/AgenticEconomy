@@ -8,7 +8,12 @@ from api.routes.common import ALLOWED_ENTITY_TYPES, get_events, get_state
 from core.nano_economy import INTEL_PRICE_DEFAULT, INTEL_PRICE_MAX, INTEL_PRICE_MIN
 from core.state import build_personality, default_behavior_settings, state
 from core.state import state_lock
-from tx.arc import get_tx_runtime_status, inspect_transaction, probe_real_transaction
+from tx.arc import (
+    get_tx_runtime_status,
+    inspect_transaction,
+    probe_real_transaction,
+    reset_tx_runtime_counters,
+)
 from utils.logger import get_action_log_stats, read_action_logs
 
 economy_tx_router = APIRouter(tags=["demo"])
@@ -320,6 +325,13 @@ def agents_current_endpoint():
 @economy_tx_router.get("/tx/diagnostics")
 def tx_diagnostics_endpoint():
     return get_tx_runtime_status()
+
+
+@economy_tx_router.post("/tx/session/reset")
+def tx_session_reset_endpoint():
+    """Reset runtime tx counters for a clean demo session."""
+    status = reset_tx_runtime_counters()
+    return {"ok": True, "message": "tx session counters reset", "status": status}
 
 
 @economy_tx_router.get("/tx/recent")
