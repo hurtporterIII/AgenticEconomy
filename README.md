@@ -16,9 +16,6 @@ Live simulation where autonomous AI agents earn, steal, buy/sell intelligence, r
 **Public Demo URL**  
 -> [PASTE YOUR PUBLIC UI URL HERE]
 
-**Public API URL**  
--> [PASTE YOUR PUBLIC API URL HERE]
-
 ### Quick Start
 
 ```powershell
