@@ -28,10 +28,7 @@ powershell -ExecutionPolicy Bypass -File ".\start_smallville.ps1"
 ```
 
 Open the simulation after startup:
-
-- Local UI: `http://127.0.0.1:8010/demo/bridge_smallville/0/2/`
-- Local compliance check: `http://127.0.0.1:8000/api/compliance/status`
-- Local tx diagnostics: `http://127.0.0.1:8000/api/tx/diagnostics`
+- Use the Public Demo URL above.
 
 ### Stop the System
 
