@@ -51,6 +51,4 @@ AgenticEconomy uses Arc + USDC settlement with sub-cent action pricing so each a
 
 ### On-Chain Proof
 
-- Recent transaction feed: `GET /api/tx/recent`
-- Runtime diagnostics: `GET /api/tx/diagnostics`
 - Explorer: [Arc Testnet Explorer](https://testnet.arcscan.app/)
